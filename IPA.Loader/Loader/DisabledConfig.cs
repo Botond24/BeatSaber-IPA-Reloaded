@@ -1,4 +1,7 @@
 ﻿using IPA.Config;
+using IPA.Config.Stores;
+using IPA.Config.Stores.Attributes;
+using IPA.Config.Stores.Converters;
 using IPA.Utilities;
 using System;
 using System.Collections.Generic;
@@ -10,33 +13,32 @@ namespace IPA.Loader
 {
     internal class DisabledConfig
     {
-        private static IConfigProvider _provider;
+        public static Config.Config Disabled { get; set; }
 
-        public static IConfigProvider Provider
-        {
-            get => _provider;
-            set
-            {
-                _provider?.RemoveLinks();
-                value.Load();
-                Ref = value.MakeLink<DisabledConfig>((c, v) =>
-                {
-                    if (v.Value.Reset)
-                        c.Store(v.Value = new DisabledConfig { Reset = false });
-                });
-                _provider = value;
-            }
-        }
-
-        public static Ref<DisabledConfig> Ref;
+        public static DisabledConfig Instance;
 
         public static void Load()
         {
-            Provider = Config.Config.GetProviderFor("Disabled Mods", "json");
+            Disabled = Config.Config.GetConfigFor("Disabled Mods", "json");
+            Instance = Disabled.Generated<DisabledConfig>();
         }
 
-        public bool Reset = true;
+        public virtual bool Reset { get; set; } = true;
 
-        public HashSet<string> DisabledModIds = new HashSet<string>();
+        [NonNullable]
+        [UseConverter(typeof(CollectionConverter<string, HashSet<string>>))]
+        public virtual HashSet<string> DisabledModIds { get; set; } = new HashSet<string>();
+
+        protected internal virtual void Changed() { }
+        protected internal virtual IDisposable ChangeTransaction() => null;
+
+        protected virtual void OnReload()
+        {
+            if (DisabledModIds == null || Reset)
+            {
+                DisabledModIds = new HashSet<string>();
+                Reset = false;
+            }
+        }
     }
 }

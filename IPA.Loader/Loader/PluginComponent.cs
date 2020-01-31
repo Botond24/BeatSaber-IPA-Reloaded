@@ -1,5 +1,7 @@
 ﻿using IPA.Config;
 using IPA.Loader.Composite;
+using IPA.Utilities;
+using IPA.Utilities.Async;
 using System.Diagnostics.CodeAnalysis;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -13,6 +15,7 @@ namespace IPA.Loader
         private CompositeBSPlugin bsPlugins;
         private CompositeIPAPlugin ipaPlugins;
         private bool quitting;
+        private static bool initialized = false;
 
         internal static PluginComponent Create()
         {
@@ -23,25 +26,35 @@ namespace IPA.Loader
         {
             DontDestroyOnLoad(gameObject);
 
-            PluginManager.Load();
+            if (!initialized)
+            {
+                UnityGame.SetMainThread();
+                UnityGame.EnsureRuntimeGameVersion();
 
-            bsPlugins = new CompositeBSPlugin(PluginManager.BSMetas);
+                PluginManager.Load();
+
+                bsPlugins = new CompositeBSPlugin(PluginManager.BSMetas);
 #pragma warning disable 618
-            ipaPlugins = new CompositeIPAPlugin(PluginManager.Plugins);
+                ipaPlugins = new CompositeIPAPlugin(PluginManager.Plugins);
 #pragma warning restore 618
 
-#if NET4
-            gameObject.AddComponent<Updating.BeatMods.Updater>();
+#if BeatSaber
+                gameObject.AddComponent<Updating.BeatMods.Updater>();
 #endif
 
-            bsPlugins.OnApplicationStart();
-            ipaPlugins.OnApplicationStart();
-            
-            SceneManager.activeSceneChanged += OnActiveSceneChanged;
-            SceneManager.sceneLoaded += OnSceneLoaded;
-            SceneManager.sceneUnloaded += OnSceneUnloaded;
+                bsPlugins.OnEnable();
+                ipaPlugins.OnApplicationStart();
 
-            Config.Config.Save();
+                SceneManager.activeSceneChanged += OnActiveSceneChanged;
+                SceneManager.sceneLoaded += OnSceneLoaded;
+                SceneManager.sceneUnloaded += OnSceneUnloaded;
+
+                var unitySched = UnityMainThreadTaskScheduler.Default as UnityMainThreadTaskScheduler;
+                if (!unitySched.IsRunning)
+                    StartCoroutine(unitySched.Coroutine());
+
+                initialized = true;
+            }
         }
 
         void Update()
@@ -49,15 +62,15 @@ namespace IPA.Loader
             bsPlugins.OnUpdate();
             ipaPlugins.OnUpdate();
 
-            Config.Config.Update();
+            var unitySched = UnityMainThreadTaskScheduler.Default as UnityMainThreadTaskScheduler;
+            if (!unitySched.IsRunning)
+                StartCoroutine(unitySched.Coroutine());
         }
 
         void LateUpdate()
         {
             bsPlugins.OnLateUpdate();
             ipaPlugins.OnLateUpdate();
-
-            //Config.Config.Update();
         }
 
         void FixedUpdate()
@@ -83,7 +96,7 @@ namespace IPA.Loader
             bsPlugins.OnApplicationQuit();
             ipaPlugins.OnApplicationQuit();
 
-            Config.Config.Save();
+            ConfigRuntime.ShutdownRuntime(); // this seems to be needed
 
             quitting = true;
         }

@@ -12,7 +12,13 @@ using IPA.Utilities;
 using Mono.Cecil;
 using UnityEngine;
 using Logger = IPA.Logging.Logger;
-using static IPA.Loader.PluginLoader;
+using System.Threading.Tasks;
+using IPA.Utilities.Async;
+#if NET4
+using TaskEx = System.Threading.Tasks.Task;
+using TaskEx6 = System.Threading.Tasks.Task;
+using Task = System.Threading.Tasks.Task;
+#endif
 #if NET3
 using Net3_Proxy;
 using Path = Net3_Proxy.Path;
@@ -29,40 +35,24 @@ namespace IPA.Loader
     {
 #pragma warning disable CS0618 // Type or member is obsolete (IPlugin)
         
-        /// <summary>
-        /// An <see cref="IEnumerable"/> of new Beat Saber plugins
-        /// </summary>
-        internal static IEnumerable<IBeatSaberPlugin> BSPlugins => (_bsPlugins ?? throw new InvalidOperationException()).Select(p => p.Plugin);
-        private static List<PluginInfo> _bsPlugins;
-        internal static IEnumerable<PluginInfo> BSMetas => _bsPlugins;
+        private static List<PluginExecutor> _bsPlugins;
+        internal static IEnumerable<PluginExecutor> BSMetas => _bsPlugins;
 
         /// <summary>
-        /// Gets info about the plugin with the specified name.
+        /// Gets info about the enabled plugin with the specified name.
         /// </summary>
         /// <param name="name">the name of the plugin to get (must be an exact match)</param>
-        /// <returns>the plugin info for the requested plugin or null</returns>
-        public static PluginInfo GetPlugin(string name)
-        {
-            return BSMetas.FirstOrDefault(p => p.Metadata.Name == name);
-        }
+        /// <returns>the plugin metadata for the requested plugin or <see langword="null"/> if it doesn't exist or is disabled</returns>
+        public static PluginMetadata GetPlugin(string name)
+            => BSMetas.Select(p => p.Metadata).FirstOrDefault(p => p.Name == name);
 
         /// <summary>
-        /// Gets info about the plugin with the specified ModSaber name.
-        /// </summary>
-        /// <param name="name">the ModSaber name of the plugin to get (must be an exact match)</param>
-        /// <returns>the plugin info for the requested plugin or null</returns>
-        [Obsolete("Old name. Use GetPluginFromId instead.")]
-        public static PluginInfo GetPluginFromModSaberName(string name) => GetPluginFromId(name);
-
-        /// <summary>
-        /// Gets info about the plugin with the specified ID.
+        /// Gets info about the enabled plugin with the specified ID.
         /// </summary>
         /// <param name="name">the ID name of the plugin to get (must be an exact match)</param>
-        /// <returns>the plugin info for the requested plugin or null</returns>
-        public static PluginInfo GetPluginFromId(string name)
-        {
-            return BSMetas.FirstOrDefault(p => p.Metadata.Id == name);
-        }
+        /// <returns>the plugin metadata for the requested plugin or <see langword="null"/> if it doesn't exist or is disabled</returns>
+        public static PluginMetadata GetPluginFromId(string name)
+            => BSMetas.Select(p => p.Metadata).FirstOrDefault(p => p.Id == name);
 
         /// <summary>
         /// Gets a disabled plugin's metadata by its name.
@@ -81,147 +71,145 @@ namespace IPA.Loader
             DisabledPlugins.FirstOrDefault(p => p.Id == name);
 
         /// <summary>
-        /// Disables a plugin, and all dependents.
+        /// Creates a new transaction for mod enabling and disabling mods simultaneously.
         /// </summary>
-        /// <param name="plugin">the plugin to disable</param>
-        /// <returns>whether or not it needs a restart to enable</returns>
-        public static bool DisablePlugin(PluginInfo plugin)
+        /// <returns>a new <see cref="StateTransitionTransaction"/> that captures the current state of loaded mods</returns>
+        public static StateTransitionTransaction PluginStateTransaction()
+            => new StateTransitionTransaction(AllPlugins, DisabledPlugins);
+
+        private static readonly object commitTransactionLockObject = new object();
+
+        internal static Task CommitTransaction(StateTransitionTransaction transaction)
         {
-            if (plugin == null) return false;
+            if (!UnityGame.OnMainThread)
+                return UnityMainThreadTaskScheduler.Factory.StartNew(() => CommitTransaction(transaction)).Unwrap();
 
-            if (plugin.Metadata.IsBare)
+            lock (commitTransactionLockObject)
             {
-                Logger.loader.Warn($"Trying to disable bare manifest");
-                return false;
-            }
-
-            if (IsDisabled(plugin.Metadata)) return false;
-
-            var needsRestart = false;
-
-            Logger.loader.Info($"Disabling {plugin.Metadata.Name}");
-
-            var dependents = BSMetas.Where(m => m.Metadata.Dependencies.Contains(plugin.Metadata)).ToList();
-            needsRestart = dependents.Aggregate(needsRestart, (b, p) => DisablePlugin(p) || b);
-
-            DisabledConfig.Ref.Value.DisabledModIds.Add(plugin.Metadata.Id ?? plugin.Metadata.Name);
-            DisabledConfig.Provider.Store(DisabledConfig.Ref.Value);
-
-            if (!needsRestart && plugin.Plugin is IDisablablePlugin disable)
-            {
-                try
-                {
-                    disable.OnDisable();
-                }
-                catch (Exception e)
-                {
-                    Logger.loader.Error($"Error occurred trying to disable {plugin.Metadata.Name}");
-                    Logger.loader.Error(e);
+                if (transaction.CurrentlyEnabled.Except(AllPlugins)
+                               .Concat(AllPlugins.Except(transaction.CurrentlyEnabled)).Any()
+                 || transaction.CurrentlyDisabled.Except(DisabledPlugins)
+                               .Concat(DisabledPlugins.Except(transaction.CurrentlyDisabled)).Any())
+                { // ensure that the transaction's base state reflects the current state, otherwise throw
+                    throw new InvalidOperationException("Transaction no longer resembles the current state of plugins");
                 }
 
-                if (needsRestart)
-                    Logger.loader.Warn($"Disablable plugin has non-disablable dependents; some things may not work properly");
-            }
-            else needsRestart = true;
+                var toEnable = transaction.ToEnable;
+                var toDisable = transaction.ToDisable;
+                transaction.Dispose();
 
-            runtimeDisabled.Add(plugin);
-            _bsPlugins.Remove(plugin);
+                using var disabledChangeTransaction = DisabledConfig.Instance.ChangeTransaction();
+                {
+                    // first enable the mods that need to be
+                    void DeTree(List<PluginMetadata> into, IEnumerable<PluginMetadata> tree)
+                    {
+                        foreach (var st in tree)
+                            if (toEnable.Contains(st) && !into.Contains(st))
+                            {
+                                DeTree(into, st.Dependencies);
+                                into.Add(st);
+                            }
+                    }
 
-            try
-            {
-                PluginDisabled?.Invoke(plugin.Metadata, needsRestart);
-            }
-            catch (Exception e)
-            {
-                Logger.loader.Error($"Error occurred invoking disable event for {plugin.Metadata.Name}");
-                Logger.loader.Error(e);
-            }
+                    var enableOrder = new List<PluginMetadata>();
+                    DeTree(enableOrder, toEnable);
 
-            return needsRestart;
+                    foreach (var meta in enableOrder)
+                    {
+                        var executor = runtimeDisabledPlugins.FirstOrDefault(e => e.Metadata == meta);
+                        if (meta.RuntimeOptions == RuntimeOptions.DynamicInit)
+                        {
+                            if (executor != null)
+                                runtimeDisabledPlugins.Remove(executor);
+                            else
+                                executor = PluginLoader.InitPlugin(meta, AllPlugins);
+
+                            if (executor == null) continue; // couldn't initialize, skip to next
+                        }
+
+                        PluginLoader.DisabledPlugins.Remove(meta);
+                        DisabledConfig.Instance.DisabledModIds.Remove(meta.Id ?? meta.Name);
+
+                        PluginEnabled?.Invoke(meta, meta.RuntimeOptions != RuntimeOptions.DynamicInit);
+
+                        if (meta.RuntimeOptions == RuntimeOptions.DynamicInit)
+                        {
+                            _bsPlugins.Add(executor);
+
+                            try
+                            {
+                                executor.Enable();
+                            }
+                            catch (Exception e)
+                            {
+                                Logger.loader.Error($"Error while enabling {meta.Id}:");
+                                Logger.loader.Error(e);
+                                // this should still be considered enabled, hence its position
+                            }
+                        }
+                    }
+                }
+
+                Task result;
+                {
+                    // then disable the mods that need to be
+                    static DisableExecutor MakeDisableExec(PluginExecutor e)
+                        => new DisableExecutor
+                        {
+                            Executor = e,
+                            Dependents = BSMetas.Where(f => f.Metadata.Dependencies.Contains(e.Metadata)).Select(MakeDisableExec)
+                        };
+
+                    var disableExecs = toDisable.Select(m => BSMetas.FirstOrDefault(e => e.Metadata == m)).NonNull().ToArray(); // eagerly evaluate once
+
+                    foreach (var exec in disableExecs)
+                    {
+                        PluginLoader.DisabledPlugins.Add(exec.Metadata);
+                        DisabledConfig.Instance.DisabledModIds.Add(exec.Metadata.Id ?? exec.Metadata.Name);
+                        if (exec.Metadata.RuntimeOptions == RuntimeOptions.DynamicInit)
+                        {
+                            runtimeDisabledPlugins.Add(exec);
+                            _bsPlugins.Remove(exec);
+                        }
+
+                        PluginDisabled?.Invoke(exec.Metadata, exec.Metadata.RuntimeOptions != RuntimeOptions.DynamicInit);
+                    }
+
+                    var disableStructure = disableExecs.Select(MakeDisableExec);
+
+                    static Task Disable(DisableExecutor exec, Dictionary<PluginExecutor, Task> alreadyDisabled)
+                    {
+                        if (alreadyDisabled.TryGetValue(exec.Executor, out var task))
+                            return task;
+                        else 
+                        {
+                            if (exec.Executor.Metadata.RuntimeOptions != RuntimeOptions.DynamicInit)
+                                return TaskEx6.FromException(new CannotRuntimeDisableException(exec.Executor.Metadata));
+
+                            var res = TaskEx.WhenAll(exec.Dependents.Select(d => Disable(d, alreadyDisabled)))
+                                 .ContinueWith(t => TaskEx.WhenAll(t, exec.Executor.Disable()), UnityMainThreadTaskScheduler.Default).Unwrap();
+                            // The WhenAll above allows us to wait for the executor to disable, but still propagate errors
+                            // By scheduling on a UnityMainThreadScheduler, we ensure that Disable() is always called on the Unity main thread
+                            alreadyDisabled.Add(exec.Executor, res);
+                            return res;
+                        }
+                    }
+
+                    var disabled = new Dictionary<PluginExecutor, Task>();
+                    result = TaskEx.WhenAll(disableStructure.Select(d => Disable(d, disabled)));
+                }
+
+                //DisabledConfig.Instance.Changed();
+                // changed is handled by transaction
+                return result;
+            }
         }
 
-        /// <summary>
-        /// Disables a plugin, and all dependents.
-        /// </summary>
-        /// <param name="pluginId">the ID, or name if the ID is null, of the plugin to disable</param>
-        /// <returns>whether a restart is needed to activate</returns>
-        public static bool DisablePlugin(string pluginId) => DisablePlugin(GetPluginFromId(pluginId) ?? GetPlugin(pluginId));
-
-        /// <summary>
-        /// Enables a plugin that had been previously disabled.
-        /// </summary>
-        /// <param name="plugin">the plugin to enable</param>
-        /// <returns>whether a restart is needed to activate</returns>
-        public static bool EnablePlugin(PluginMetadata plugin)
+        private struct DisableExecutor
         {
-            if (plugin == null) return false;
-
-            if (plugin.IsBare)
-            {
-                Logger.loader.Warn($"Trying to enable bare manifest");
-                return false;
-            }
-
-            if (!IsDisabled(plugin)) return false;
-
-            Logger.loader.Info($"Enabling {plugin.Name}");
-
-            DisabledConfig.Ref.Value.DisabledModIds.Remove(plugin.Id ?? plugin.Name);
-            DisabledConfig.Provider.Store(DisabledConfig.Ref.Value);
-
-            var needsRestart = true;
-
-            var depsNeedRestart = plugin.Dependencies.Aggregate(false, (b, p) => EnablePlugin(p) || b);
-
-            var runtimeInfo = runtimeDisabled.FirstOrDefault(p => p.Metadata == plugin);
-            if (runtimeInfo != null && runtimeInfo.Plugin is IDisablablePlugin disable)
-            {
-                try
-                {
-                    disable.OnEnable();
-                }
-                catch (Exception e)
-                {
-                    Logger.loader.Error($"Error occurred trying to enable {plugin.Name}");
-                    Logger.loader.Error(e);
-                }
-                needsRestart = false;
-            }
-            else
-            {
-                PluginLoader.DisabledPlugins.Remove(plugin);
-                if (runtimeInfo == null)
-                {
-                    runtimeInfo = InitPlugin(plugin);
-                    needsRestart = false;
-                }
-            }
-
-            if (runtimeInfo != null)
-                runtimeDisabled.Remove(runtimeInfo);
-
-            _bsPlugins.Add(runtimeInfo);
-
-            try
-            {
-                PluginEnabled?.Invoke(runtimeInfo, needsRestart || depsNeedRestart);
-            }
-            catch (Exception e)
-            {
-                Logger.loader.Error($"Error occurred invoking enable event for {plugin.Name}");
-                Logger.loader.Error(e);
-            }
-
-            return needsRestart || depsNeedRestart;
+            public PluginExecutor Executor;
+            public IEnumerable<DisableExecutor> Dependents;
         }
-
-        /// <summary>
-        /// Enables a plugin that had been previously disabled.
-        /// </summary>
-        /// <param name="pluginId">the ID, or name if the ID is null, of the plugin to enable</param>
-        /// <returns>whether a restart is needed to activate</returns>
-        public static bool EnablePlugin(string pluginId) => 
-            EnablePlugin(GetDisabledPluginFromId(pluginId) ?? GetDisabledPlugin(pluginId));
 
         /// <summary>
         /// Checks if a given plugin is disabled.
@@ -237,19 +225,19 @@ namespace IPA.Loader
         /// <returns><see langword="true"/> if the plugin is enabled, <see langword="false"/> otherwise.</returns>
         public static bool IsEnabled(PluginMetadata meta) => BSMetas.Any(p => p.Metadata == meta);
 
-        private static readonly List<PluginInfo> runtimeDisabled = new List<PluginInfo>();
         /// <summary>
         /// Gets a list of disabled BSIPA plugins.
         /// </summary>
         /// <value>a collection of all disabled plugins as <see cref="PluginMetadata"/></value>
-        public static IEnumerable<PluginMetadata> DisabledPlugins => PluginLoader.DisabledPlugins.Concat(runtimeDisabled.Select(p => p.Metadata));
+        public static IEnumerable<PluginMetadata> DisabledPlugins => PluginLoader.DisabledPlugins;
+        private static readonly HashSet<PluginExecutor> runtimeDisabledPlugins = new HashSet<PluginExecutor>();
 
         /// <summary>
         /// An invoker for the <see cref="PluginEnabled"/> event.
         /// </summary>
         /// <param name="plugin">the plugin that was enabled</param>
         /// <param name="needsRestart">whether it needs a restart to take effect</param>
-        public delegate void PluginEnableDelegate(PluginInfo plugin, bool needsRestart);
+        public delegate void PluginEnableDelegate(PluginMetadata plugin, bool needsRestart);
         /// <summary>
         /// An invoker for the <see cref="PluginDisabled"/> event.
         /// </summary>
@@ -267,43 +255,30 @@ namespace IPA.Loader
         public static event PluginDisableDelegate PluginDisabled;
 
         /// <summary>
-        /// Gets a list of all BSIPA plugins.
+        /// Gets a list of all enabled BSIPA plugins.
         /// </summary>
-        /// <value>a collection of all enabled plugins as <see cref="PluginInfo"/>s</value>
-        public static IEnumerable<PluginInfo> AllPlugins => BSMetas;
+        /// <value>a collection of all enabled plugins as <see cref="PluginMetadata"/>s</value>
+        public static IEnumerable<PluginMetadata> AllPlugins => BSMetas.Select(p => p.Metadata);
 
         /// <summary>
-        /// Converts a plugin's metadata to a <see cref="PluginInfo"/>.
-        /// </summary>
-        /// <param name="meta">the metadata</param>
-        /// <returns>the plugin info</returns>
-        public static PluginInfo InfoFromMetadata(PluginMetadata meta)
-        {
-            if (IsDisabled(meta))
-                return runtimeDisabled.FirstOrDefault(p => p.Metadata == meta);
-            else
-                return AllPlugins.FirstOrDefault(p => p.Metadata == meta);
-        }
-
-        /// <summary>
-        /// An <see cref="IEnumerable"/> of old IPA plugins.
+        /// An <see cref="IEnumerable{T}"/> of old IPA plugins.
         /// </summary>
         /// <value>all legacy plugin instances</value>
         [Obsolete("I mean, IPlugin shouldn't be used, so why should this? Not renaming to extend support for old plugins.")]
-        public static IEnumerable<IPlugin> Plugins => _ipaPlugins;
-        private static List<IPlugin> _ipaPlugins;
+        public static IEnumerable<Old.IPlugin> Plugins => _ipaPlugins;
+        private static List<Old.IPlugin> _ipaPlugins;
 
         internal static IConfigProvider SelfConfigProvider { get; set; }
 
         internal static void Load()
         {
-            string pluginDirectory = BeatSaber.PluginsPath;
+            string pluginDirectory = UnityGame.PluginsPath;
 
             // Process.GetCurrentProcess().MainModule crashes the game and Assembly.GetEntryAssembly() is NULL,
             // so we need to resort to P/Invoke
             string exeName = Path.GetFileNameWithoutExtension(AppInfo.StartupPath);
-            _bsPlugins = new List<PluginInfo>();
-            _ipaPlugins = new List<IPlugin>();
+            _bsPlugins = new List<PluginExecutor>();
+            _ipaPlugins = new List<Old.IPlugin>();
 
             if (!Directory.Exists(pluginDirectory)) return;
 
@@ -324,11 +299,17 @@ namespace IPA.Loader
             // initialize BSIPA plugins first
             _bsPlugins.AddRange(PluginLoader.LoadPlugins());
 
+            var metadataPaths = PluginLoader.PluginsMetadata.Select(m => m.File.FullName).ToList();
+            var ignoredPaths = PluginLoader.ignoredPlugins.Select(m => m.Key.File.FullName).ToList();
+            var disabledPaths = DisabledPlugins.Select(m => m.File.FullName).ToList();
+
             //Copy plugins to .cache
             string[] originalPlugins = Directory.GetFiles(pluginDirectory, "*.dll");
             foreach (string s in originalPlugins)
             {
-                if (PluginsMetadata.Select(m => m.File.FullName).Contains(s)) continue;
+                if (metadataPaths.Contains(s)) continue;
+                if (ignoredPaths.Contains(s)) continue;
+                if (disabledPaths.Contains(s)) continue;
                 string pluginCopy = Path.Combine(cacheDir, Path.GetFileName(s));
 
                 #region Fix assemblies for refactor
@@ -346,9 +327,8 @@ namespace IPA.Loader
                 { // fix type references
                     if (@ref.FullName == "IllusionPlugin.IPlugin") @ref.Namespace = "IPA.Old"; //@ref.Name = "";
                     if (@ref.FullName == "IllusionPlugin.IEnhancedPlugin") @ref.Namespace = "IPA.Old"; //@ref.Name = "";
-                    if (@ref.FullName == "IllusionPlugin.IBeatSaberPlugin") @ref.Namespace = "IPA"; //@ref.Name = "";
-                    if (@ref.FullName == "IllusionPlugin.IEnhancedBeatSaberPlugin") @ref.Namespace = "IPA"; //@ref.Name = "";
-                    if (@ref.FullName == "IllusionPlugin.BeatSaber.ModsaberModInfo") @ref.Namespace = "IPA"; //@ref.Name = "";
+                    if (@ref.FullName == "IllusionPlugin.IBeatSaberPlugin") { @ref.Namespace = "IPA"; @ref.Name = nameof(IPlugin); }
+                    if (@ref.FullName == "IllusionPlugin.IEnhancedBeatSaberPlugin") { @ref.Namespace = "IPA"; @ref.Name = nameof(IEnhancedPlugin); }
                     if (@ref.FullName == "IllusionPlugin.IniFile") @ref.Namespace = "IPA.Config"; //@ref.Name = "";
                     if (@ref.FullName == "IllusionPlugin.IModPrefs") @ref.Namespace = "IPA.Config"; //@ref.Name = "";
                     if (@ref.FullName == "IllusionPlugin.ModPrefs") @ref.Namespace = "IPA.Config"; //@ref.Name = "";
@@ -365,7 +345,6 @@ namespace IPA.Loader
                     if (@ref.FullName == "IllusionInjector.Updating.Backup.BackupUnit") @ref.Namespace = "IPA.Updating.Backup"; //@ref.Name = "";
                     if (@ref.Namespace == "IllusionInjector.Utilities") @ref.Namespace = "IPA.Utilities"; //@ref.Name = "";
                     if (@ref.Namespace == "IllusionInjector.Logging.Printers") @ref.Namespace = "IPA.Logging.Printers"; //@ref.Name = "";
-                    if (@ref.Namespace == "IllusionInjector.Updating.ModsaberML") @ref.Namespace = "IPA.Updating.ModSaber"; //@ref.Name = "";
                 }
                 module.Write(pluginCopy);
 
@@ -377,12 +356,13 @@ namespace IPA.Loader
             foreach (string s in copiedPlugins)
             {
                 var result = LoadPluginsFromFile(s);
-                _ipaPlugins.AddRange(result.Item2);
+                if (result == null) continue;
+                _ipaPlugins.AddRange(result.NonNull());
             }
-            
+
             Logger.log.Info(exeName);
             Logger.log.Info($"Running on Unity {Application.unityVersion}");
-            Logger.log.Info($"Game version {BeatSaber.GameVersion}");
+            Logger.log.Info($"Game version {UnityGame.GameVersion}");
             Logger.log.Info("-----------------------------");
             Logger.log.Info($"Loading plugins from {Utils.GetRelativePath(pluginDirectory, Environment.CurrentDirectory)} and found {_bsPlugins.Count + _ipaPlugins.Count}");
             Logger.log.Info("-----------------------------");
@@ -398,17 +378,16 @@ namespace IPA.Loader
             Logger.log.Info("-----------------------------");
         }
 
-        private static Tuple<IEnumerable<PluginInfo>, IEnumerable<IPlugin>> LoadPluginsFromFile(string file)
+        private static IEnumerable<Old.IPlugin> LoadPluginsFromFile(string file)
         {
-            List<IPlugin> ipaPlugins = new List<IPlugin>();
+            var ipaPlugins = new List<Old.IPlugin>();
 
             if (!File.Exists(file) || !file.EndsWith(".dll", true, null))
-                return new Tuple<IEnumerable<PluginInfo>, IEnumerable<IPlugin>>(null, ipaPlugins);
+                return ipaPlugins;
 
             T OptionalGetPlugin<T>(Type t) where T : class
             {
-                // use typeof() to allow for easier renaming (in an ideal world this compiles to a string, but ¯\_(ツ)_/¯)
-                if (t.GetInterface(typeof(T).Name) != null)
+                if (t.FindInterfaces((t, o) => t == (o as Type), typeof(T)).Length > 0)
                 {
                     try
                     {
@@ -431,7 +410,7 @@ namespace IPA.Loader
                 foreach (Type t in assembly.GetTypes())
                 {
                        
-                    IPlugin ipaPlugin = OptionalGetPlugin<IPlugin>(t);
+                    var ipaPlugin = OptionalGetPlugin<Old.IPlugin>(t);
                     if (ipaPlugin != null)
                     {
                         ipaPlugins.Add(ipaPlugin);
@@ -450,7 +429,7 @@ namespace IPA.Loader
                 Logger.loader.Error(e);
             }
 
-            return new Tuple<IEnumerable<PluginInfo>, IEnumerable<IPlugin>>(null, ipaPlugins);
+            return ipaPlugins;
         }
 
         internal static class AppInfo

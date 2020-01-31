@@ -12,6 +12,11 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Version = SemVer.Version;
+using SemVer;
+#if NET4
+using Task = System.Threading.Tasks.Task;
+using TaskEx = System.Threading.Tasks.Task;
+#endif
 #if NET3
 using Net3_Proxy;
 using Path = Net3_Proxy.Path;
@@ -24,9 +29,10 @@ namespace IPA.Loader
     /// <summary>
     /// A type to manage the loading of plugins.
     /// </summary>
-    public class PluginLoader
+    internal class PluginLoader
     {
-        internal static Task LoadTask() => Task.Factory.StartNew(() =>
+        internal static Task LoadTask() =>
+            TaskEx.Run(() =>
         {
             YeetIfNeeded();
 
@@ -38,109 +44,14 @@ namespace IPA.Loader
             ResolveDependencies();
         });
 
-        /// <summary>
-        /// A class which describes a loaded plugin.
-        /// </summary>
-        public class PluginMetadata
-        {
-            /// <summary>
-            /// The assembly the plugin was loaded from.
-            /// </summary>
-            /// <value>the loaded Assembly that contains the plugin main type</value>
-            public Assembly Assembly { get; internal set; }
-
-            /// <summary>
-            /// The TypeDefinition for the main type of the plugin.
-            /// </summary>
-            /// <value>the Cecil definition for the plugin main type</value>
-            public TypeDefinition PluginType { get; internal set; }
-
-            /// <summary>
-            /// The human readable name of the plugin.
-            /// </summary>
-            /// <value>the name of the plugin</value>
-            public string Name { get; internal set; }
-
-            /// <summary>
-            /// The BeatMods ID of the plugin, or null if it doesn't have one.
-            /// </summary>
-            /// <value>the updater ID of the plugin</value>
-            public string Id { get; internal set; }
-
-            /// <summary>
-            /// The version of the plugin.
-            /// </summary>
-            /// <value>the version of the plugin</value>
-            public Version Version { get; internal set; }
-
-            /// <summary>
-            /// The file the plugin was loaded from.
-            /// </summary>
-            /// <value>the file the plugin was loaded from</value>
-            public FileInfo File { get; internal set; }
-
-            // ReSharper disable once UnusedAutoPropertyAccessor.Global
-            /// <summary>
-            /// The features this plugin requests.
-            /// </summary>
-            /// <value>the list of features requested by the plugin</value>
-            public IReadOnlyList<Feature> Features => InternalFeatures;
-
-            internal readonly List<Feature> InternalFeatures = new List<Feature>();
-
-            internal bool IsSelf;
-
-            /// <summary>
-            /// Whether or not this metadata object represents a bare manifest.
-            /// </summary>
-            /// <value><see langword="true"/> if it is bare, <see langword="false"/> otherwise</value>
-            public bool IsBare { get; internal set; }
-
-            private PluginManifest manifest;
-
-            internal HashSet<PluginMetadata> Dependencies { get; } = new HashSet<PluginMetadata>();
-
-            internal PluginManifest Manifest
-            {
-                get => manifest;
-                set
-                {
-                    manifest = value;
-                    Name = value.Name;
-                    Version = value.Version;
-                    Id = value.Id;
-                }
-            }
-
-            /// <summary>
-            /// Gets all of the metadata as a readable string.
-            /// </summary>
-            /// <returns>the readable printable metadata string</returns>
-            public override string ToString() => $"{Name}({Id}@{Version})({PluginType?.FullName}) from '{Utils.GetRelativePath(File?.FullName, BeatSaber.InstallPath)}'";
-        }
-
-        /// <summary>
-        /// A container object for all the data relating to a plugin.
-        /// </summary>
-        public class PluginInfo
-        {
-            internal IBeatSaberPlugin Plugin { get; set; }
-
-            /// <summary>
-            /// Metadata for the plugin.
-            /// </summary>
-            /// <value>the metadata for this plugin</value>
-            public PluginMetadata Metadata { get; internal set; } = new PluginMetadata();
-        }
-
         internal static void YeetIfNeeded()
         {
-            string pluginDir = BeatSaber.PluginsPath;
+            string pluginDir = UnityGame.PluginsPath;
 
-            if (SelfConfig.YeetMods_ && BeatSaber.IsGameVersionBoundary)
+            if (SelfConfig.YeetMods_ && UnityGame.IsGameVersionBoundary)
             {
-                var oldPluginsName = Path.Combine(BeatSaber.InstallPath, $"Old {BeatSaber.OldVersion} Plugins");
-                var newPluginsName = Path.Combine(BeatSaber.InstallPath, $"Old {BeatSaber.GameVersion} Plugins");
+                var oldPluginsName = Path.Combine(UnityGame.InstallPath, $"Old {UnityGame.OldVersion} Plugins");
+                var newPluginsName = Path.Combine(UnityGame.InstallPath, $"Old {UnityGame.GameVersion} Plugins");
 
                 if (Directory.Exists(oldPluginsName))
                     Directory.Delete(oldPluginsName, true);
@@ -159,14 +70,14 @@ namespace IPA.Loader
 
         internal static void LoadMetadata()
         {
-            string[] plugins = Directory.GetFiles(BeatSaber.PluginsPath, "*.dll");
+            string[] plugins = Directory.GetFiles(UnityGame.PluginsPath, "*.dll");
 
             try
             {
                 var selfMeta = new PluginMetadata
                 {
                     Assembly = Assembly.GetExecutingAssembly(),
-                    File = new FileInfo(Path.Combine(BeatSaber.InstallPath, "IPA.exe")),
+                    File = new FileInfo(Path.Combine(UnityGame.InstallPath, "IPA.exe")),
                     PluginType = null,
                     IsSelf = true
                 };
@@ -190,14 +101,14 @@ namespace IPA.Loader
 
             foreach (var plugin in plugins)
             {
+                var metadata = new PluginMetadata
+                {
+                    File = new FileInfo(Path.Combine(UnityGame.PluginsPath, plugin)),
+                    IsSelf = false
+                };
+
                 try
                 {
-                    var metadata = new PluginMetadata
-                    {
-                        File = new FileInfo(Path.Combine(BeatSaber.PluginsPath, plugin)),
-                        IsSelf = false
-                    };
-
                     var pluginModule = AssemblyDefinition.ReadAssembly(plugin, new ReaderParameters
                     {
                        ReadingMode = ReadingMode.Immediate,
@@ -233,24 +144,61 @@ namespace IPA.Loader
                         continue;
                     }
 
-                    foreach (var type in pluginModule.Types)
+                    void TryGetNamespacedPluginType(string ns, PluginMetadata meta)
                     {
-                        if (type.Namespace != pluginNs) continue;
-
-                        foreach (var inter in type.Interfaces)
+                        foreach (var type in pluginModule.Types)
                         {
-                            if (typeof(IBeatSaberPlugin).FullName == inter.InterfaceType.FullName)
+                            if (type.Namespace != ns) continue;
+
+                            if (type.HasCustomAttributes)
                             {
-                                metadata.PluginType = type;
-                                goto type_loop_done; // break out of both loops
+                                var attr = type.CustomAttributes.FirstOrDefault(a => a.Constructor.DeclaringType.FullName == typeof(PluginAttribute).FullName);
+                                if (attr != null)
+                                {
+                                    if (!attr.HasConstructorArguments)
+                                    {
+                                        Logger.loader.Warn($"Attribute plugin found in {type.FullName}, but attribute has no arguments");
+                                        return;
+                                    }
+
+                                    var args = attr.ConstructorArguments;
+                                    if (args.Count != 1)
+                                    {
+                                        Logger.loader.Warn($"Attribute plugin found in {type.FullName}, but attribute has unexpected number of arguments");
+                                        return;
+                                    }
+                                    var rtOptionsArg = args[0];
+                                    if (rtOptionsArg.Type.FullName != typeof(RuntimeOptions).FullName)
+                                    {
+                                        Logger.loader.Warn($"Attribute plugin found in {type.FullName}, but first argument is of unexpected type {rtOptionsArg.Type.FullName}");
+                                        return;
+                                    }
+
+                                    var rtOptionsValInt = (int)rtOptionsArg.Value; // `int` is the underlying type of RuntimeOptions
+
+                                    meta.RuntimeOptions = (RuntimeOptions)rtOptionsValInt;
+                                    meta.PluginType = type;
+                                    return;
+                                }
                             }
                         }
                     }
 
-                    type_loop_done:
+                    var hint = metadata.Manifest.Misc?.PluginMainHint;
+
+                    if (hint != null)
+                    {
+                        var type = pluginModule.GetType(hint);
+                        if (type != null)
+                            TryGetNamespacedPluginType(hint, metadata);
+                    }
+
+                    if (metadata.PluginType == null)
+                        TryGetNamespacedPluginType(pluginNs, metadata);
+
                     if (metadata.PluginType == null)
                     {
-                        Logger.loader.Error($"No plugin found in the manifest namespace ({pluginNs}) in {Path.GetFileName(plugin)}");
+                        Logger.loader.Error($"No plugin found in the manifest {(hint != null ? $"hint path ({hint}) or " : "")}namespace ({pluginNs}) in {Path.GetFileName(plugin)}");
                         continue;
                     }
 
@@ -261,18 +209,23 @@ namespace IPA.Loader
                 {
                     Logger.loader.Error($"Could not load data for plugin {Path.GetFileName(plugin)}");
                     Logger.loader.Error(e);
+                    ignoredPlugins.Add(metadata, new IgnoreReason(Reason.Error)
+                    {
+                        ReasonText = "An error ocurred loading the data",
+                        Error = e
+                    });
                 }
             }
 
-            IEnumerable<string> bareManifests = Directory.GetFiles(BeatSaber.PluginsPath, "*.json");
-            bareManifests = bareManifests.Concat(Directory.GetFiles(BeatSaber.PluginsPath, "*.manifest"));
+            IEnumerable<string> bareManifests = Directory.GetFiles(UnityGame.PluginsPath, "*.json");
+            bareManifests = bareManifests.Concat(Directory.GetFiles(UnityGame.PluginsPath, "*.manifest"));
             foreach (var manifest in bareManifests)
-            {
+            { // TODO: maybe find a way to allow a bare manifest to specify an associated file
                 try
                 {
                     var metadata = new PluginMetadata
                     {
-                        File = new FileInfo(Path.Combine(BeatSaber.PluginsPath, manifest)),
+                        File = new FileInfo(Path.Combine(UnityGame.PluginsPath, manifest)),
                         IsSelf = false,
                         IsBare = true,
                     };
@@ -307,7 +260,7 @@ namespace IPA.Loader
                     if (!meta.IsSelf)
                     {
                         var resc = meta.PluginType.Module.Resources.Select(r => r as EmbeddedResource)
-                                                                   .Where(r => r != null)
+                                                                   .NonNull()
                                                                    .FirstOrDefault(r => r.Name == name);
                         if (resc == null)
                         {
@@ -316,16 +269,13 @@ namespace IPA.Loader
                             continue;
                         }
 
-                        using (var reader = new StreamReader(resc.GetResourceStream()))
-                            description = reader.ReadToEnd();
+                        using var reader = new StreamReader(resc.GetResourceStream());
+                        description = reader.ReadToEnd();
                     }
                     else
                     {
-                        using (var descriptionReader =
-                            new StreamReader(
-                                meta.Assembly.GetManifestResourceStream(name) ??
-                                throw new InvalidOperationException()))
-                            description = descriptionReader.ReadToEnd();
+                        using var descriptionReader = new StreamReader(meta.Assembly.GetManifestResourceStream(name));
+                        description = descriptionReader.ReadToEnd();
                     }
 
                     meta.Manifest.Description = description;
@@ -333,16 +283,37 @@ namespace IPA.Loader
             }
         }
 
+        internal enum Reason
+        {
+            Error, Duplicate, Conflict, Dependency,
+            Released, Feature, Unsupported
+        }
+        internal struct IgnoreReason
+        {
+
+            public Reason Reason { get; }
+            public string ReasonText { get; set; }
+            public Exception Error { get; set; }
+            public PluginMetadata RelatedTo { get; set; }
+            public IgnoreReason(Reason reason)
+            {
+                Reason = reason;
+                ReasonText = null;
+                Error = null;
+                RelatedTo = null;
+            }
+        }
+
         // keep track of these for the updater; it should still be able to update mods not loaded
-        // TODO: add ignore reason
-        internal static HashSet<PluginMetadata> ignoredPlugins = new HashSet<PluginMetadata>();
+        // the thing -> the reason
+        internal static Dictionary<PluginMetadata, IgnoreReason> ignoredPlugins = new Dictionary<PluginMetadata, IgnoreReason>();
 
         internal static void Resolve()
         { // resolves duplicates and conflicts, etc
             PluginsMetadata.Sort((a, b) => b.Version.CompareTo(a.Version));
             
             var ids = new HashSet<string>();
-            var ignore = new HashSet<PluginMetadata>();
+            var ignore = new Dictionary<PluginMetadata, IgnoreReason>();
             var resolved = new List<PluginMetadata>(PluginsMetadata.Count);
             foreach (var meta in PluginsMetadata)
             {
@@ -351,15 +322,20 @@ namespace IPA.Loader
                     if (ids.Contains(meta.Id))
                     {
                         Logger.loader.Warn($"Found duplicates of {meta.Id}, using newest");
-                        ignore.Add(meta);
-                        ignoredPlugins.Add(meta);
+                        var ireason = new IgnoreReason(Reason.Duplicate)
+                        {
+                            ReasonText = $"Duplicate entry of same ID ({meta.Id})",
+                            RelatedTo = resolved.First(p => p.Id == meta.Id)
+                        };
+                        ignore.Add(meta, ireason);
+                        ignoredPlugins.Add(meta, ireason);
                         continue; // because of sorted order, hightest order will always be the first one
                     }
 
                     bool processedLater = false;
                     foreach (var meta2 in PluginsMetadata)
                     {
-                        if (ignore.Contains(meta2)) continue;
+                        if (ignore.ContainsKey(meta2)) continue;
                         if (meta == meta2)
                         {
                             processedLater = true;
@@ -371,25 +347,33 @@ namespace IPA.Loader
                         var range = meta2.Manifest.Conflicts[meta.Id];
                         if (!range.IsSatisfied(meta.Version)) continue;
 
-                        Logger.loader.Warn($"{meta.Id}@{meta.Version} conflicts with {meta2.Name}");
+                        Logger.loader.Warn($"{meta.Id}@{meta.Version} conflicts with {meta2.Id}");
 
                         if (processedLater)
                         {
                             Logger.loader.Warn($"Ignoring {meta2.Name}");
-                            ignore.Add(meta2);
+                            ignore.Add(meta2, new IgnoreReason(Reason.Conflict)
+                            {
+                                ReasonText = $"{meta.Id}@{meta.Version} conflicts with {meta2.Id}",
+                                RelatedTo = meta
+                            });
                         }
                         else
                         {
                             Logger.loader.Warn($"Ignoring {meta.Name}");
-                            ignore.Add(meta);
+                            ignore.Add(meta, new IgnoreReason(Reason.Conflict)
+                            {
+                                ReasonText = $"{meta2.Id}@{meta2.Version} conflicts with {meta.Id}",
+                                RelatedTo = meta2
+                            });
                             break;
                         }
                     }
                 }
 
-                if (ignore.Contains(meta))
+                if (ignore.TryGetValue(meta, out var reason))
                 {
-                    ignoredPlugins.Add(meta);
+                    ignoredPlugins.Add(meta, reason);
                     continue;
                 }
                 if (meta.Id != null)
@@ -405,7 +389,7 @@ namespace IPA.Loader
         {
             var enabled = new List<PluginMetadata>(PluginsMetadata.Count);
 
-            var disabled = DisabledConfig.Ref.Value.DisabledModIds;
+            var disabled = DisabledConfig.Instance.DisabledModIds;
             foreach (var meta in PluginsMetadata)
             {
                 if (disabled.Contains(meta.Id ?? meta.Name))
@@ -423,7 +407,7 @@ namespace IPA.Loader
             Logger.loader.Debug(string.Join(", ", PluginsMetadata.Select(p => p.ToString()).StrJP()));
 #endif
 
-            bool InsertInto(HashSet<PluginMetadata> root, PluginMetadata meta, bool isRoot = false)
+            static bool InsertInto(HashSet<PluginMetadata> root, PluginMetadata meta, bool isRoot = false)
             { // this is slow, and hella recursive
                 bool inserted = false;
                 foreach (var sr in root)
@@ -462,7 +446,7 @@ namespace IPA.Loader
             foreach (var meta in PluginsMetadata)
                 InsertInto(pluginTree, meta, true);
 
-            void DeTree(List<PluginMetadata> into, HashSet<PluginMetadata> tree)
+            static void DeTree(List<PluginMetadata> into, HashSet<PluginMetadata> tree)
             {
                 foreach (var st in tree)
                     if (!into.Contains(st))
@@ -484,11 +468,10 @@ namespace IPA.Loader
         {
             var metadata = new List<PluginMetadata>();
             var pluginsToLoad = new Dictionary<string, Version>();
-            var disabledLookup = DisabledPlugins.Where(m => m.Id != null).ToDictionary(m => m.Id, m => m.Version);
+            var disabledLookup = DisabledPlugins.NonNull(m => m.Id).ToDictionary(m => m.Id, m => m.Version);
             foreach (var meta in PluginsMetadata)
             {
-                bool load = true;
-                bool disable = false;
+                var missingDeps = new List<(string id, Range version, bool disabled)>();
                 foreach (var dep in meta.Manifest.Dependencies)
                 {
 #if DEBUG
@@ -497,43 +480,48 @@ namespace IPA.Loader
                     if (pluginsToLoad.ContainsKey(dep.Key) && dep.Value.IsSatisfied(pluginsToLoad[dep.Key]))
                         continue;
 
-                    load = false;
-
                     if (disabledLookup.ContainsKey(dep.Key) && dep.Value.IsSatisfied(disabledLookup[dep.Key]))
                     {
-                        disable = true;
                         Logger.loader.Warn($"Dependency {dep.Key} was found, but disabled. Disabling {meta.Name} too.");
+                        missingDeps.Add((dep.Key, dep.Value, true));
                     }
                     else
+                    {
                         Logger.loader.Warn($"{meta.Name} is missing dependency {dep.Key}@{dep.Value}");
-
-                    break;
+                        missingDeps.Add((dep.Key, dep.Value, false));
+                    }
                 }
 
-                if (load)
+                if (missingDeps.Count == 0)
                 {
                     metadata.Add(meta);
                     if (meta.Id != null)
                         pluginsToLoad.Add(meta.Id, meta.Version);
                 }
-                else if (disable)
-                {
-                    DisabledPlugins.Add(meta);
-                    DisabledConfig.Ref.Value.DisabledModIds.Add(meta.Id ?? meta.Name);
+                else if (missingDeps.Any(t => !t.disabled))
+                { // missing deps
+                    ignoredPlugins.Add(meta, new IgnoreReason(Reason.Dependency)
+                    {
+                        ReasonText = $"Missing dependencies {string.Join(", ", missingDeps.Where(t => !t.disabled).Select(t => $"{t.id}@{t.version}").StrJP())}"
+                    });
                 }
                 else
-                    ignoredPlugins.Add(meta);
+                {
+                    DisabledPlugins.Add(meta);
+                    DisabledConfig.Instance.DisabledModIds.Add(meta.Id ?? meta.Name);
+                }
             }
 
+            DisabledConfig.Instance.Changed();
             PluginsMetadata = metadata;
         }
 
         internal static void InitFeatures()
         {
             var parsedFeatures = PluginsMetadata.Select(m =>
-                    Tuple.Create(m,
-                        m.Manifest.Features.Select(f => 
-                            Tuple.Create(f, Ref.Create<Feature.FeatureParse?>(null))
+                    (metadata: m,
+                     features: m.Manifest.Features.Select(feature => 
+                            (feature, parsed: Ref.Create<Feature.FeatureParse?>(null))
                         ).ToList()
                     )
                 ).ToList();
@@ -542,30 +530,30 @@ namespace IPA.Loader
             {
                 DefineFeature.NewFeature = false;
 
-                foreach (var plugin in parsedFeatures)
-                    for (var i = 0; i < plugin.Item2.Count; i++)
+                foreach (var (metadata, features) in parsedFeatures)
+                    for (var i = 0; i < features.Count; i++)
                     {
-                        var feature = plugin.Item2[i];
+                        var feature = features[i];
 
-                        var success = Feature.TryParseFeature(feature.Item1, plugin.Item1, out var featureObj,
-                            out var exception, out var valid, out var parsed, feature.Item2.Value);
+                        var success = Feature.TryParseFeature(feature.feature, metadata, out var featureObj,
+                            out var exception, out var valid, out var parsed, feature.parsed.Value);
 
                         if (!success && !valid && featureObj == null && exception == null) // no feature of type found
-                            feature.Item2.Value = parsed;
+                            feature.parsed.Value = parsed;
                         else if (success)
                         {
                             if (valid && featureObj.StoreOnPlugin)
-                                plugin.Item1.InternalFeatures.Add(featureObj);
+                                metadata.InternalFeatures.Add(featureObj);
                             else if (!valid)
                                 Logger.features.Warn(
-                                    $"Feature not valid on {plugin.Item1.Name}: {featureObj.InvalidMessage}");
-                            plugin.Item2.RemoveAt(i--);
+                                    $"Feature not valid on {metadata.Name}: {featureObj.InvalidMessage}");
+                            features.RemoveAt(i--);
                         }
                         else
                         {
-                            Logger.features.Error($"Error parsing feature definition on {plugin.Item1.Name}");
+                            Logger.features.Error($"Error parsing feature definition on {metadata.Name}");
                             Logger.features.Error(exception);
-                            plugin.Item2.RemoveAt(i--);
+                            features.RemoveAt(i--);
                         }
                     }
 
@@ -576,23 +564,23 @@ namespace IPA.Loader
 
             foreach (var plugin in parsedFeatures)
             {
-                if (plugin.Item2.Count <= 0) continue;
+                if (plugin.features.Count <= 0) continue;
 
-                Logger.features.Warn($"On plugin {plugin.Item1.Name}:");
-                foreach (var feature in plugin.Item2)
-                    Logger.features.Warn($"    Feature not found with name {feature.Item1}");
+                Logger.features.Warn($"On plugin {plugin.metadata.Name}:");
+                foreach (var feature in plugin.features)
+                    Logger.features.Warn($"    Feature not found with name {feature.feature}");
             }
         }
 
         internal static void ReleaseAll(bool full = false)
         {
             if (full)
-                ignoredPlugins = new HashSet<PluginMetadata>();
+                ignoredPlugins = new Dictionary<PluginMetadata, IgnoreReason>();
             else
             {
                 foreach (var m in PluginsMetadata)
-                    ignoredPlugins.Add(m);
-                foreach (var m in ignoredPlugins)
+                    ignoredPlugins.Add(m, new IgnoreReason(Reason.Released));
+                foreach (var m in ignoredPlugins.Keys)
                 { // clean them up so we can still use the metadata for updates
                     m.InternalFeatures.Clear();
                     m.PluginType = null;
@@ -611,97 +599,132 @@ namespace IPA.Loader
                 meta.Assembly = Assembly.LoadFrom(meta.File.FullName);
         }
 
-        internal static PluginInfo InitPlugin(PluginMetadata meta)
+        internal static PluginExecutor InitPlugin(PluginMetadata meta, IEnumerable<PluginMetadata> alreadyLoaded)
         {
-            if (meta.PluginType == null)
-                return new PluginInfo()
-                {
-                    Metadata = meta,
-                    Plugin = null
-                };
-
-            var info = new PluginInfo();
-
-            if (meta.Manifest.GameVersion != BeatSaber.GameVersion)
+            if (meta.Manifest.GameVersion != UnityGame.GameVersion)
                 Logger.loader.Warn($"Mod {meta.Name} developed for game version {meta.Manifest.GameVersion}, so it may not work properly.");
 
-            try
-            {
-                Load(meta);
+            if (meta.IsSelf)
+                return new PluginExecutor(meta, PluginExecutor.Special.Self);
 
-                Feature denyingFeature = null;
-                if (!meta.Features.All(f => (denyingFeature = f).BeforeLoad(meta)))
+            foreach (var dep in meta.Dependencies)
+            {
+                if (alreadyLoaded.Contains(dep)) continue;
+
+                // otherwise...
+
+                if (ignoredPlugins.TryGetValue(dep, out var reason))
+                { // was added to the ignore list
+                    ignoredPlugins.Add(meta, new IgnoreReason(Reason.Dependency)
+                    {
+                        ReasonText = $"Dependency was ignored at load time: {reason.ReasonText}",
+                        RelatedTo = dep
+                    });
+                }
+                else
+                { // was not added to ignore list
+                    ignoredPlugins.Add(meta, new IgnoreReason(Reason.Dependency)
+                    {
+                        ReasonText = $"Dependency was not already loaded at load time, but was also not ignored",
+                        RelatedTo = dep
+                    });
+                }
+
+                return null;
+            }
+
+            if (meta.IsBare)
+                return new PluginExecutor(meta, PluginExecutor.Special.Bare);
+
+            Load(meta);
+
+            foreach (var feature in meta.Features)
+            {
+                if (!feature.BeforeLoad(meta))
                 {
                     Logger.loader.Warn(
-                        $"Feature {denyingFeature?.GetType()} denied plugin {meta.Name} from loading! {denyingFeature?.InvalidMessage}");
-                    ignoredPlugins.Add(meta);
+                        $"Feature {feature?.GetType()} denied plugin {meta.Name} from loading! {feature?.InvalidMessage}");
+                    ignoredPlugins.Add(meta, new IgnoreReason(Reason.Feature)
+                    {
+                        ReasonText = $"Denied in {nameof(Feature.BeforeLoad)} of feature {feature?.GetType()}:\n\t{feature?.InvalidMessage}"
+                    });
                     return null;
                 }
-
-                var type = meta.Assembly.GetType(meta.PluginType.FullName);
-                var instance = (IBeatSaberPlugin)Activator.CreateInstance(type);
-
-                info.Metadata = meta;
-                info.Plugin = instance;
-
-                var init = type.GetMethod("Init", BindingFlags.Instance | BindingFlags.Public);
-                if (init != null)
-                {
-                    denyingFeature = null;
-                    if (!meta.Features.All(f => (denyingFeature = f).BeforeInit(info)))
-                    {
-                        Logger.loader.Warn(
-                            $"Feature {denyingFeature?.GetType()} denied plugin {meta.Name} from initializing! {denyingFeature?.InvalidMessage}");
-                        ignoredPlugins.Add(meta);
-                        return null;
-                    }
-
-                    PluginInitInjector.Inject(init, info);
-                }
-
-                foreach (var feature in meta.Features)
-                    try
-                    {
-                        feature.AfterInit(info, info.Plugin);
-                    }
-                    catch (Exception e)
-                    {
-                        Logger.loader.Critical($"Feature errored in {nameof(Feature.AfterInit)}: {e}");
-                    }
-
-                if (instance is IDisablablePlugin disable)
-                    try // TODO: move this out to after all plugins have been inited
-                    {
-                        disable.OnEnable();
-                    }
-                    catch (Exception e)
-                    {
-                        Logger.loader.Error($"Error occurred trying to enable {meta.Name}");
-                        Logger.loader.Error(e);
-                    }
             }
-            catch (AmbiguousMatchException)
+
+            PluginExecutor exec;
+            try
             {
-                Logger.loader.Error($"Only one Init allowed per plugin (ambiguous match in {meta.Name})");
-                // not adding to ignoredPlugins here because this should only happen in a development context
-                // if someone fucks this up on release thats on them
-                return null;
+                exec = new PluginExecutor(meta);
             }
             catch (Exception e)
             {
-                Logger.loader.Error($"Could not init plugin {meta.Name}: {e}");
-                ignoredPlugins.Add(meta);
+                Logger.loader.Error($"Error creating executor for {meta.Name}");
+                Logger.loader.Error(e);
                 return null;
             }
 
-            return info;
+            foreach (var feature in meta.Features)
+            {
+                if (!feature.BeforeInit(meta))
+                {
+                    Logger.loader.Warn(
+                        $"Feature {feature?.GetType()} denied plugin {meta.Name} from initializing! {feature?.InvalidMessage}");
+                    ignoredPlugins.Add(meta, new IgnoreReason(Reason.Feature)
+                    {
+                        ReasonText = $"Denied in {nameof(Feature.BeforeInit)} of feature {feature?.GetType()}:\n\t{feature?.InvalidMessage}"
+                    });
+                    return null;
+                }
+            }
+                
+            try
+            {
+                exec.Create();
+            }
+            catch (Exception e)
+            {
+                Logger.loader.Error($"Could not init plugin {meta.Name}");
+                Logger.loader.Error(e);
+                ignoredPlugins.Add(meta, new IgnoreReason(Reason.Error)
+                {
+                    ReasonText = "Error ocurred while initializing",
+                    Error = e
+                });
+                return null;
+            }
+
+            foreach (var feature in meta.Features)
+                try
+                {
+                    feature.AfterInit(meta, exec.Instance);
+                }
+                catch (Exception e)
+                {
+                    Logger.loader.Critical($"Feature errored in {nameof(Feature.AfterInit)}: {e}");
+                }
+
+            return exec;
         }
 
-        internal static List<PluginInfo> LoadPlugins()
+        internal static List<PluginExecutor> LoadPlugins()
         {
             InitFeatures();
             DisabledPlugins.ForEach(Load); // make sure they get loaded into memory so their metadata and stuff can be read more easily
-            return PluginsMetadata.Select(InitPlugin).Where(p => p != null).ToList();
+
+            var list = new List<PluginExecutor>();
+            var loaded = new HashSet<PluginMetadata>();
+            foreach (var meta in PluginsMetadata)
+            {
+                var exec = InitPlugin(meta, loaded);
+                if (exec != null)
+                {
+                    list.Add(exec);
+                    loaded.Add(meta);
+                }
+            }
+
+            return list;
         }
     }
 }

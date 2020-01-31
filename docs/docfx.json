@@ -12,7 +12,8 @@
         "TMP Exporter/**.csproj",
         "BuildTools/**.csproj",
         "Doorstop/**.csproj",
-        "Net3-Proxy/**.csproj"
+        "Net3-Proxy/**.csproj",
+        "docs/**.csproj"
       ]
     }],
     "dest": "api",
@@ -57,7 +58,7 @@
     "globalMetadataFiles": [],
     "fileMetadataFiles": [],
     "template": [
-      "default", "templates/material/material", "templates/fix_urls"
+      "default", "templates/material/material", "templates/fix_urls", "templates/bsipa_custom"
     ],
     "globalMetadata": {
       "_enableSearch": true,

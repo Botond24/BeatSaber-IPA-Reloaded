@@ -15,11 +15,20 @@ namespace Net3_Proxy
     {
         public static T GetCustomAttribute<T>(this ParameterInfo element) where T : Attribute
             => (T)GetCustomAttribute(element, typeof(T));
+        public static T GetCustomAttribute<T>(this MethodInfo element) where T : Attribute
+            => (T)GetCustomAttribute(element, typeof(T));
+        public static T GetCustomAttribute<T>(this ConstructorInfo element) where T : Attribute
+            => (T)GetCustomAttribute(element, typeof(T));
+        public static T GetCustomAttribute<T>(this Type element) where T : Attribute
+            => (T)GetCustomAttribute(element, typeof(T));
 
         public static Attribute GetCustomAttribute(this MemberInfo element, Type attributeType)
             => Attribute.GetCustomAttribute(element, attributeType);
-
+        public static Attribute GetCustomAttribute(this ConstructorInfo element, Type attributeType)
+            => Attribute.GetCustomAttribute(element, attributeType);
         public static Attribute GetCustomAttribute(this ParameterInfo element, Type attributeType) 
+            => Attribute.GetCustomAttribute(element, attributeType);
+        public static Attribute GetCustomAttribute(this Type element, Type attributeType)
             => Attribute.GetCustomAttribute(element, attributeType);
 
         public static StringBuilder Clear(this StringBuilder sb)
@@ -49,7 +58,7 @@ namespace Net3_Proxy
         {
             if (searchPattern == null)
             {
-                throw new ArgumentNullException("searchPattern");
+                throw new ArgumentNullException(nameof(searchPattern));
             }
             return CreateEnumerateFilesIterator(self, searchPattern, searchOption);
         }
@@ -79,11 +88,11 @@ namespace Net3_Proxy
         {
             if (destination == null)
             {
-                throw new ArgumentNullException("destination");
+                throw new ArgumentNullException(nameof(destination));
             }
             if (bufferSize <= 0)
             {
-                throw new ArgumentOutOfRangeException("bufferSize", "Positive number required.");
+                throw new ArgumentOutOfRangeException(nameof(bufferSize), "Positive number required.");
             }
             if (!src.CanRead && !src.CanWrite)
             {
@@ -170,5 +179,13 @@ namespace Net3_Proxy
                 count,
                 new object());
 
+    }
+
+    public static class SemaphoreSlimExtesnions
+    { // TODO: finish the WaitAsync members
+        /*public static Task WaitAsync(this SemaphoreSlim self)
+        {
+            return null;
+        }*/
     }
 }

@@ -30,8 +30,8 @@
 ::from ./bsinstalldir.txt
 "Beat Saber_Data/
 ""Managed/
-"""Assembly-CSharp.dll
-"""MainAssembly.dll
+"""Assembly-CSharp.dll?virt
+"""MainAssembly.dll?virt
 ::endopt
 
 ::startopt

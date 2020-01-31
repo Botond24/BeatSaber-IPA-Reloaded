@@ -104,7 +104,7 @@ namespace IPA.Logging
         /// All levels defined by this filter will be sent to loggers. All others will be ignored.
         /// </summary>
         /// <value>the global filter level</value>
-        public static LogLevel PrintFilter { get; set; } = LogLevel.All;
+        public static LogLevel PrintFilter { get; internal set; } = LogLevel.All;
         private static bool showTrace = false;
 
         private readonly List<LogPrinter> printers = new List<LogPrinter>();
@@ -115,8 +115,7 @@ namespace IPA.Logging
         /// <summary>
         /// Configures internal debug settings based on the config passed in.
         /// </summary>
-        /// <param name="cfg"></param>
-        internal static void Configure(SelfConfig cfg)
+        internal static void Configure()
         {
             showSourceClass = SelfConfig.Debug_.ShowCallSource_;
             PrintFilter = SelfConfig.Debug_.ShowDebug_ ? LogLevel.All : LogLevel.InfoUp;
@@ -128,7 +127,7 @@ namespace IPA.Logging
             logName = $"{parent.logName}/{subName}";
             this.parent = parent;
             printers = new List<LogPrinter>();
-            if (SelfConfig.Debug_.CondenseModLogs_)
+            if (!SelfConfig.Debug_.CondenseModLogs_)
                 printers.Add(new PluginSubLogPrinter(parent.logName, subName));
 
             if (logThread == null || !logThread.IsAlive)
@@ -194,6 +193,7 @@ namespace IPA.Logging
             if (message == null)
                 throw new ArgumentNullException(nameof(message));
 
+            // FIXME: trace doesn't seem to ever actually appear
             if (!showTrace && level == Level.Trace) return;
 
             // make sure that the queue isn't being cleared
@@ -269,7 +269,7 @@ namespace IPA.Logging
             var started = new HashSet<LogPrinter>();
             while (logQueue.TryTake(out var msg, Timeout.Infinite))
             {
-                StdoutInterceptor.Intercept();
+                StdoutInterceptor.Intercept(); // only runs once, after the first message is queued
                 do
                 {
                     var logger = msg.Logger;
@@ -305,11 +305,11 @@ namespace IPA.Logging
                         }
                     }
 
-                    var debugConfig = SelfConfig.SelfConfigRef?.Value?.Debug;
+                    var debugConfig = SelfConfig.Instance?.Debug;
 
                     if (debugConfig != null && debugConfig.HideMessagesForPerformance 
                         && logQueue.Count > debugConfig.HideLogThreshold)
-                    { // spam filtering (if queue has more tha 512 elements)
+                    { // spam filtering (if queue has more than HideLogThreshold elements)
                         logWaitEvent.Reset(); // pause incoming log requests
 
                         // clear loggers for this instance, to print the message to all affected logs

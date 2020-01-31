@@ -10,7 +10,7 @@ using Version = SemVer.Version;
 
 namespace IPA.Updating.BeatMods
 {
-#if NET4
+#if BeatSaber
     class ApiEndpoint
     {
         public const string BeatModBase = "https://beatmods.com";
@@ -104,7 +104,7 @@ namespace IPA.Updating.BeatMods
             public Version Version;
 
             [JsonProperty("gameVersion"),
-             JsonConverter(typeof(AlmostVersionConverter))]
+             JsonConverter(typeof(JsonConverters.AlmostVersionConverter))]
             public AlmostVersion GameVersion;
 
             [Serializable]

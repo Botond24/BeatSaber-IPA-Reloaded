@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Reflection;
+using System.Reflection.Emit;
 using UnityEngine;
 
 namespace IPA.Utilities
@@ -7,71 +8,78 @@ namespace IPA.Utilities
     /// <summary>
     /// A utility class providing reflection helper methods.
     /// </summary>
-	public static class ReflectionUtil
-	{
+    public static partial class ReflectionUtil
+    {
+        internal static readonly FieldInfo DynamicMethodReturnType = 
+            typeof(DynamicMethod).GetField("returnType", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+
         /// <summary>
-        /// Sets a (potentially) private field on the target object.
+        /// Sets a field on the target object, as gotten from <typeparamref name="T"/>.
         /// </summary>
+        /// <typeparam name="T">the type to get the field from</typeparam>
+        /// <typeparam name="U">the type of the field to set</typeparam>
         /// <param name="obj">the object instance</param>
         /// <param name="fieldName">the field to set</param>
         /// <param name="value">the value to set it to</param>
-		public static void SetPrivateField(this object obj, string fieldName, object value)
-		{
-			var prop = obj.GetType().GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
-			prop?.SetValue(obj, value);
-		}
-		
+        /// <exception cref="MissingFieldException">if <paramref name="fieldName"/> does not exist on <typeparamref name="T"/></exception>
+        /// <seealso cref="FieldAccessor{T, U}.Set(ref T, string, U)"/>
+        public static void SetField<T, U>(this T obj, string fieldName, U value)
+            => FieldAccessor<T, U>.Set(ref obj, fieldName, value);
+
         /// <summary>
-        /// Gets the value of a (potentially) private field.
+        /// Gets the value of a field.
         /// </summary>
-        /// <typeparam name="T">the type of te field (result casted)</typeparam>
+        /// <typeparam name="T">the type to get the field from</typeparam>
+        /// <typeparam name="U">the type of the field (result casted)</typeparam>
         /// <param name="obj">the object instance to pull from</param>
         /// <param name="fieldName">the name of the field to read</param>
         /// <returns>the value of the field</returns>
-		public static T GetPrivateField<T>(this object obj, string fieldName)
-		{
-			var prop = obj.GetType().GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
-			var value = prop?.GetValue(obj);
-			return (T) value;
-		}
-		
+        /// <exception cref="MissingFieldException">if <paramref name="fieldName"/> does not exist on <typeparamref name="T"/></exception>
+        /// <seealso cref="FieldAccessor{T, U}.Get(ref T, string)"/>
+        public static U GetField<U, T>(this T obj, string fieldName)
+            => FieldAccessor<T, U>.Get(ref obj, fieldName);
+
         /// <summary>
-        /// Sets a (potentially) private property on the target object.
+        /// Sets a property on the target object, as gotten from <typeparamref name="T"/>.
         /// </summary>
-        /// <param name="obj">the target object instance</param>
-        /// <param name="propertyName">the name of the property</param>
+        /// <typeparam name="T">the type to get the property from</typeparam>
+        /// <typeparam name="U">the type of the property to set</typeparam>
+        /// <param name="obj">the object instance</param>
+        /// <param name="propertyName">the property to set</param>
         /// <param name="value">the value to set it to</param>
-		public static void SetPrivateProperty(this object obj, string propertyName, object value)
-		{
-			var prop = obj.GetType()
-				.GetProperty(propertyName, BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
-			prop?.SetValue(obj, value, null);
-		}
+        /// <exception cref="MissingMemberException">if <paramref name="propertyName"/> does not exist on <typeparamref name="T"/></exception>
+        /// <seealso cref="PropertyAccessor{T, U}.Set(ref T, string, U)"/>
+        public static void SetProperty<T, U>(this T obj, string propertyName, U value)
+            => PropertyAccessor<T, U>.Set(ref obj, propertyName, value);
 
         /// <summary>
-        /// Invokes a (potentially) private method.
+        /// Gets a property on the target object, as gotten from <typeparamref name="T"/>.
         /// </summary>
-        /// <param name="obj">the object to call from</param>
-        /// <param name="methodName">the method name</param>
-        /// <param name="methodParams">the method parameters</param>
-        /// <returns>the return value</returns>
-		public static object InvokePrivateMethod(this object obj, string methodName, params object[] methodParams)
-		{
-			MethodInfo dynMethod = obj.GetType().GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
-			return dynMethod?.Invoke(obj, methodParams);
-		}
+        /// <typeparam name="T">the type to get the property from</typeparam>
+        /// <typeparam name="U">the type of the property to get</typeparam>
+        /// <param name="obj">the object instance</param>
+        /// <param name="propertyName">the property to get</param>
+        /// <returns>the value of the property</returns>
+        /// <exception cref="MissingMemberException">if <paramref name="propertyName"/> does not exist on <typeparamref name="T"/></exception>
+        /// <seealso cref="PropertyAccessor{T, U}.Get(ref T, string)"/>
+        public static U GetProperty<U, T>(this T obj, string propertyName)
+            => PropertyAccessor<T, U>.Get(ref obj, propertyName);
 
         /// <summary>
-        /// Invokes a (potentially) private method.
+        /// Invokes a method from <typeparamref name="T"/> on an object.
         /// </summary>
-        /// <typeparam name="T">the return type</typeparam>
-        /// <param name="obj">the object to call from</param>
-        /// <param name="methodName">the method name to call</param>
-        /// <param name="methodParams">the method's parameters</param>
+        /// <typeparam name="U">the type of the property to get</typeparam>
+        /// <typeparam name="T">the type to search for the method on</typeparam>
+        /// <param name="obj">the object instance</param>
+        /// <param name="methodName">the method's name</param>
+        /// <param name="args">the method arguments</param>
         /// <returns>the return value</returns>
-        public static T InvokePrivateMethod<T>(this object obj, string methodName, params object[] methodParams)
+        /// <exception cref="MissingMethodException">if <paramref name="methodName"/> does not exist on <typeparamref name="T"/></exception>
+        public static U InvokeMethod<U, T>(this T obj, string methodName, params object[] args)
         {
-            return (T)InvokePrivateMethod(obj, methodName, methodParams);
+            var dynMethod = typeof(T).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
+            if (dynMethod == null) throw new MissingMethodException($"Method {methodName} does not exist", nameof(methodName));
+            return (U)dynMethod?.Invoke(obj, args);
         }
 
         /// <summary>
@@ -124,71 +132,12 @@ namespace IPA.Utilities
 
         private static void CopyForType(Type type, Component source, Component destination)
         {
-            FieldInfo[] myObjectFields = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance | BindingFlags.GetField);
+            FieldInfo[] myObjectFields = type.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
 
             foreach (FieldInfo fi in myObjectFields)
             {
                 fi.SetValue(destination, fi.GetValue(source));
             }
-        }
-
-        /// <summary>
-        /// Calls an instance method on a type specified by <paramref name="functionClass"/> and <paramref name="dependency"/>.
-        /// </summary>
-        /// <seealso cref="CallNonStaticMethod(Type, string, Type[], object[])"/>
-        /// <param name="functionClass">the type name</param>
-        /// <param name="dependency">the assembly the type is in</param>
-        /// <param name="function">the name of the method to call</param>
-        /// <param name="methodSig">the type signature of the method</param>
-        /// <param name="parameters">the method parameters</param>
-        /// <returns>the result of the call</returns>
-        public static object CallNonStaticMethod(string functionClass, string dependency, string function, Type[] methodSig, params object[] parameters)
-        {
-            return CallNonStaticMethod(Type.GetType(string.Format("{0},{1}", functionClass, dependency)), function, methodSig, parameters);
-        }
-
-        /// <summary>
-        /// Calls an instance method on a new object.
-        /// </summary>
-        /// <param name="type">the object type</param>
-        /// <param name="function">the name of the method to call</param>
-        /// <param name="methodSig">the type signature</param>
-        /// <param name="parameters">the parameters</param>
-        /// <returns>the result of the call</returns>
-        public static object CallNonStaticMethod(this Type type, /*string functionClass, string dependency,*/ string function, Type[] methodSig, params object[] parameters)
-        {
-            //Type FunctionClass = Type.GetType(string.Format("{0},{1}", functionClass, dependency));
-            if (type != null)
-            {
-                object instance = Activator.CreateInstance(type);
-                {
-                    Type instType = instance.GetType();
-                    MethodInfo methodInfo = instType.GetMethod(function, methodSig);
-                    if (methodInfo != null)
-                    {
-                        return methodInfo.Invoke(instance, parameters);
-                    }
-
-                    throw new Exception("Method not found");
-                }
-            }
-
-            throw new ArgumentNullException(nameof(type));
-        }
-
-        /// <summary>
-        /// Calls an instance method on a new object.
-        /// </summary>
-        /// <seealso cref="CallNonStaticMethod(Type, string, Type[], object[])"/>
-        /// <typeparam name="T">the return type</typeparam>
-        /// <param name="type">the object type</param>
-        /// <param name="function">the name of the method to call</param>
-        /// <param name="methodSig">the type signature</param>
-        /// <param name="parameters">the parameters</param>
-        /// <returns>the result of the call</returns>
-        public static T CallNonStaticMethod<T>(this Type type, string function, Type[] methodSig, params object[] parameters)
-        {
-            return (T)CallNonStaticMethod(type, function, methodSig, parameters);
         }
     }
 }

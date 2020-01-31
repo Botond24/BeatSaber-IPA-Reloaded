@@ -4,6 +4,7 @@
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">Net4</Platform>
+    <BuildForBeatSaber Condition=" '$(BuildForBeatSaber)' == '' And '$(Platform)' == 'Net4' ">true</BuildForBeatSaber>
     <ProjectGuid>{5AD344F0-01A0-4CA8-92E5-9D095737744D}</ProjectGuid>
     <OutputType>Library</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
@@ -16,6 +17,8 @@
     <ShowTargetFrameworks>false</ShowTargetFrameworks>
     <ShowTargetFrameworks Condition=" '$(BuildingInsideVisualStudio)' != 'true' Or '$(CI)' == 'True' ">true</ShowTargetFrameworks>
     <TargetFrameworks Condition=" '$(ShowTargetFrameworks)' == 'true' ">net461;net35</TargetFrameworks>
+    <LangVersion>8.0</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugSymbols>true</DebugSymbols>
@@ -24,7 +27,6 @@
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RegisterForComInterop>false</RegisterForComInterop>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
@@ -33,7 +35,6 @@
     <DefineConstants>TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RegisterForComInterop>false</RegisterForComInterop>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Platform)' == 'Net4' ">
@@ -43,6 +44,9 @@
   <PropertyGroup Condition=" '$(Platform)' == 'Net3' ">
     <TargetFrameworkVersion>v3.5</TargetFrameworkVersion>
     <DefineConstants>$(DefineConstants);NET3</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(BuildForBeatSaber)' == 'true' ">
+    <DefineConstants>$(DefineConstants);BeatSaber</DefineConstants>
   </PropertyGroup>
   <PropertyGroup>
     <DocumentationFile>$(OutputPath)IPA.Loader.xml</DocumentationFile>
@@ -85,33 +89,47 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Config\Config.cs" />
-    <Compile Include="Config\ConfigProviders\JsonConfigProvider.cs" />
+    <Compile Include="Config\ConfigRuntime.cs" />
+    <Compile Include="Config\Providers\JsonConfigProvider.cs" />
+    <Compile Include="Config\Data\List.cs" />
+    <Compile Include="Config\Data\Map.cs" />
+    <Compile Include="Config\Data\Primitives.cs" />
+    <Compile Include="Config\Data\Value.cs" />
     <Compile Include="Config\IConfigProvider.cs" />
+    <Compile Include="Config\IConfigStore.cs" />
     <Compile Include="Config\SelfConfig.cs" />
+    <Compile Include="Config\Stores\Attributes.cs" />
+    <Compile Include="Config\Stores\Converters.cs" />
+    <Compile Include="Config\Stores\CustomObjectConverter.cs" />
+    <Compile Include="Config\Stores\CollectionConverter.cs" />
+    <Compile Include="Config\Stores\GeneratedStoreImpl.cs" />
+    <Compile Include="Config\Stores\GeneratedStoreCollections.cs" />
+    <Compile Include="Config\Stores\ValueConverter.cs" />
     <Compile Include="JsonConverters\AlmostVersionConverter.cs" />
     <Compile Include="JsonConverters\MultilineStringConverter.cs" />
+    <Compile Include="Loader\CannotRuntimeDisableException.cs" />
     <Compile Include="Loader\Composite\CompositeBSPlugin.cs" />
     <Compile Include="Loader\DisabledConfig.cs" />
-    <Compile Include="Loader\Features\AddInFeature.cs" />
     <Compile Include="Loader\Features\ConfigProviderFeature.cs" />
     <Compile Include="Loader\Features\DefineFeature.cs" />
     <Compile Include="Loader\Features\InitInjectorFeature.cs" />
     <Compile Include="Loader\Features\NoUpdateFeature.cs" />
     <Compile Include="Loader\Features\PrintFeature.cs" />
     <Compile Include="Loader\HarmonyProtector.cs" />
+    <Compile Include="Loader\PluginExecutor.cs" />
     <Compile Include="Loader\PluginInitInjector.cs" />
     <Compile Include="Loader\LibLoader.cs" />
     <Compile Include="Loader\Features\Feature.cs" />
     <Compile Include="Loader\PluginLoader.cs" />
     <Compile Include="Loader\PluginManifest.cs" />
+    <Compile Include="Loader\PluginMetadata.cs" />
+    <Compile Include="Loader\StateTransitionTransaction.cs" />
     <Compile Include="Logging\ConsoleWindow.cs" />
     <Compile Include="Logging\Printers\ColorlessConsolePrinter.cs" />
     <Compile Include="Logging\Printers\PluginSubLogPrinter.cs" />
     <Compile Include="Logging\StdoutInterceptor.cs" />
-    <Compile Include="PluginInterfaces\BeatSaber\IBeatSaberPlugin.cs" />
-    <Compile Include="PluginInterfaces\BeatSaber\IDisablablePlugin.cs" />
-    <Compile Include="PluginInterfaces\BeatSaber\IEnhancedBeatSaberPlugin.cs" />
-    <Compile Include="PluginInterfaces\IGenericEnhancedPlugin.cs" />
+    <Compile Include="PluginInterfaces\Attributes\LifecycleAttributes.cs" />
+    <Compile Include="PluginInterfaces\Attributes\PluginAttribute.cs" />
     <Compile Include="Config\IniFile.cs" />
     <Compile Include="PluginInterfaces\IPA\IEnhancedPlugin.cs" />
     <Compile Include="PluginInterfaces\IPA\IPlugin.cs" />
@@ -120,9 +138,14 @@
     <Compile Include="Config\ModPrefs.cs" />
     <Compile Include="JsonConverters\SemverRangeConverter.cs" />
     <Compile Include="JsonConverters\SemverVersionConverter.cs" />
-    <Compile Include="Utilities\BeatSaber.cs" />
+    <Compile Include="Utilities\Async\Coroutines.cs" />
+    <Compile Include="Utilities\Async\SingleThreadTaskScheduler.cs" />
+    <Compile Include="Utilities\Accessor.cs" />
+    <Compile Include="Utilities\Async\UnityMainThreadTaskScheduler.cs" />
+    <Compile Include="Utilities\UnityGame.cs" />
     <Compile Include="Utilities\AlmostVersion.cs" />
     <Compile Include="Utilities\CriticalSection.cs" />
+    <Compile Include="Utilities\EnumerableExtensions.cs" />
     <Compile Include="Utilities\Ref.cs" />
     <Compile Include="Utilities\ReflectionUtil.cs" />
     <Compile Include="Loader\Composite\CompositeIPAPlugin.cs" />
@@ -138,6 +161,7 @@
     <Compile Include="Updating\BeatMods\ApiEndpoint.cs" />
     <Compile Include="Updating\BeatMods\Updater.cs" />
     <Compile Include="Utilities\Extensions.cs" />
+    <Compile Include="Utilities\Async\Synchronization.cs" />
     <Compile Include="Utilities\Utils.cs" />
     <Compile Include="Utilities\Win32.cs" />
   </ItemGroup>
@@ -152,10 +176,13 @@
       <Version>0.10.4</Version>
     </PackageReference>
     <PackageReference Include="Newtonsoft.Json">
-      <Version>12.0.2</Version>
+      <Version>12.0.3</Version>
+    </PackageReference>
+    <PackageReference Include="Portable.System.ValueTuple">
+      <Version>1.0.1</Version>
     </PackageReference>
     <PackageReference Include="SemanticVersioning">
-      <Version>1.2.0</Version>
+      <Version>1.2.2</Version>
     </PackageReference>
     <PackageReference Include="AsyncBridge">
       <Version>0.3.1</Version>
@@ -167,7 +194,8 @@
     <EmbeddedResource Include="Loader\description.md" />
   </ItemGroup>
   <ItemGroup>
-	<None Include="icon_black.png" />
+    <None Include="icon_black.png" />
   </ItemGroup>
+  <ItemGroup />
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

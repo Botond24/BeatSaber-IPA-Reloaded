@@ -78,25 +78,23 @@ namespace IPA.Injector
 
                 if (AntiPiracy.IsInvalid(Environment.CurrentDirectory))
                 {
-                    loader.Error("Invalid installation; please buy the game to run BSIPA.");
+                    log.Error("Invalid installation; please buy the game to run BSIPA.");
 
                     return;
                 }
 
                 CriticalSection.Configure();
 
-                loader.Debug("Prepping bootstrapper");
-
+                injector.Debug("Prepping bootstrapper");
+                
                 // updates backup
                 InstallBootstrapPatch();
-
-                LibLoader.SetupAssemblyFilenames(true);
 
                 GameVersionEarly.Load();
 
                 Updates.InstallPendingUpdates();
 
-                //HarmonyProtector.Protect();
+                LibLoader.SetupAssemblyFilenames(true);
 
                 pluginAsyncLoadTask = PluginLoader.LoadTask();
                 permissionFixTask = PermissionFix.FixPermissions(new DirectoryInfo(Environment.CurrentDirectory));
@@ -123,6 +121,11 @@ namespace IPA.Injector
             LibLoader.Configure();
         }
 
+        private static void InstallHarmonyProtections()
+        { // proxy function to delay resolution
+            HarmonyProtectorProxy.ProtectNull();
+        }
+
         private static void InstallBootstrapPatch()
         {
             var cAsmName = Assembly.GetExecutingAssembly().GetName();
@@ -131,13 +134,13 @@ namespace IPA.Injector
             var dataDir = new DirectoryInfo(managedPath).Parent.Name;
             var gameName = dataDir.Substring(0, dataDir.Length - 5);
 
-            loader.Debug("Finding backup");
+            injector.Debug("Finding backup");
             var backupPath = Path.Combine(Environment.CurrentDirectory, "IPA", "Backups", gameName);
             var bkp = BackupManager.FindLatestBackup(backupPath);
             if (bkp == null)
-                loader.Warn("No backup found! Was BSIPA installed using the installer?");
+                injector.Warn("No backup found! Was BSIPA installed using the installer?");
 
-            loader.Debug("Ensuring patch on UnityEngine.CoreModule exists");
+            injector.Debug("Ensuring patch on UnityEngine.CoreModule exists");
 
             #region Insert patch into UnityEngine.CoreModule.dll
 
@@ -146,7 +149,7 @@ namespace IPA.Injector
                     "UnityEngine.CoreModule.dll");
 
                 // this is a critical section because if you exit in here, CoreModule can die
-                CriticalSection.EnterExecuteSection();
+                using var critSec = CriticalSection.ExecuteSection();
 
                 var unityAsmDef = AssemblyDefinition.ReadAssembly(unityPath, new ReaderParameters
                 {
@@ -170,6 +173,13 @@ namespace IPA.Injector
                 }
 
                 var application = unityModDef.GetType("UnityEngine", "Application");
+
+                if (application == null)
+                {
+                    injector.Critical("UnityEngine.CoreModule doesn't have a definition for UnityEngine.Application!"
+                        + "Nothing to patch to get ourselves into the Unity run cycle!");
+                    goto endPatchCoreModule;
+                }
 
                 MethodDefinition cctor = null;
                 foreach (var m in application.Methods)
@@ -227,69 +237,63 @@ namespace IPA.Injector
                     bkp?.Add(unityPath);
                     unityAsmDef.Write(unityPath);
                 }
-
-                CriticalSection.ExitExecuteSection();
             }
-
+            endPatchCoreModule:
             #endregion Insert patch into UnityEngine.CoreModule.dll
 
-            loader.Debug("Ensuring Assembly-CSharp is virtualized");
-            
+            injector.Debug("Ensuring game assemblies are virtualized");
+
+            #region Virtualize game assemblies
+            bool isFirst = true;
+            foreach(var name in SelfConfig.GameAssemblies_)
             {
-                var ascPath = Path.Combine(managedPath,
-                    "MainAssembly.dll"); // TODO: change to config option for other games
+                var ascPath = Path.Combine(managedPath, name);
 
-                #region Virtualize Assembly-CSharp.dll
-
-                {
-                    CriticalSection.EnterExecuteSection();
-
-                    try
-                    {
-                        var ascModule = VirtualizedModule.Load(ascPath);
-                        ascModule.Virtualize(cAsmName, () => bkp?.Add(ascPath));
-                    }
-                    catch (Exception e) 
-                    {
-                        loader.Error($"Could not virtualize {ascPath}");
-                        loader.Error(e);
-                    }
-
-                    CriticalSection.ExitExecuteSection();
-                }
-
-                #endregion Virtualize Assembly-CSharp.dll
-
-                #region Anti-Yeet
-
-                CriticalSection.EnterExecuteSection();
+                using var execSec = CriticalSection.ExecuteSection();
 
                 try
                 {
-                    loader.Debug("Applying anti-yeet patch");
-                    
-                    var ascAsmDef = AssemblyDefinition.ReadAssembly(ascPath, new ReaderParameters
-                    {
-                        ReadWrite = false,
-                        InMemory = true,
-                        ReadingMode = ReadingMode.Immediate
-                    });
-                    var ascModDef = ascAsmDef.MainModule;
-
-                    var deleter = ascModDef.GetType("IPAPluginsDirDeleter");
-                    deleter.Methods.Clear(); // delete all methods
-
-                    ascAsmDef.Write(ascPath);
+                    injector.Debug($"Virtualizing {name}");
+                    using var ascModule = VirtualizedModule.Load(ascPath);
+                    ascModule.Virtualize(cAsmName, () => bkp?.Add(ascPath));
                 }
-                catch (Exception)
+                catch (Exception e) 
                 {
-                    // ignore
+                    injector.Error($"Could not virtualize {ascPath}");
+                    if (SelfConfig.Debug_.ShowHandledErrorStackTraces_)
+                        injector.Error(e);
                 }
 
-                CriticalSection.ExitExecuteSection();
+                if (isFirst)
+                {
+                    try
+                    {
+                        injector.Debug("Applying anti-yeet patch");
 
-                #endregion
+                        var ascAsmDef = AssemblyDefinition.ReadAssembly(ascPath, new ReaderParameters
+                        {
+                            ReadWrite = false,
+                            InMemory = true,
+                            ReadingMode = ReadingMode.Immediate
+                        });
+                        var ascModDef = ascAsmDef.MainModule;
+
+                        var deleter = ascModDef.GetType("IPAPluginsDirDeleter");
+                        deleter.Methods.Clear(); // delete all methods
+
+                        ascAsmDef.Write(ascPath);
+
+                        isFirst = false;
+                    }
+                    catch (Exception e)
+                    {
+                        injector.Warn($"Could not apply anti-yeet patch to {ascPath}");
+                        if (SelfConfig.Debug_.ShowHandledErrorStackTraces_)
+                            injector.Warn(e);
+                    }
+                }
             }
+            #endregion
         }
 
         private static bool bootstrapped;
@@ -302,6 +306,7 @@ namespace IPA.Injector
             /*if (otherNewtonsoftJson != null)
                 Assembly.LoadFrom(otherNewtonsoftJson);*/
 
+
             Application.logMessageReceived += delegate (string condition, string stackTrace, LogType type)
             {
                 var level = UnityLogRedirector.LogTypeToLevel(type);
@@ -311,6 +316,8 @@ namespace IPA.Injector
 
             // need to reinit streams singe Unity seems to redirect stdout
             StdoutInterceptor.RedirectConsole();
+
+            InstallHarmonyProtections();
 
             var bootstrapper = new GameObject("NonDestructiveBootstrapper").AddComponent<Bootstrapper>();
             bootstrapper.Destroyed += Bootstrapper_Destroyed;
@@ -324,11 +331,13 @@ namespace IPA.Injector
             pluginAsyncLoadTask.Wait();
             permissionFixTask.Wait();
 
-            BeatSaber.EnsureRuntimeGameVersion();
-
             log.Debug("Plugins loaded");
             log.Debug(string.Join(", ", PluginLoader.PluginsMetadata.StrJP()));
             PluginComponent.Create();
+
+#if DEBUG
+            Config.Stores.GeneratedStoreImpl.DebugSaveAssembly("GeneratedAssembly.dll");
+#endif
         }
     }
 }

@@ -1,4 +1,7 @@
-﻿using System;
+﻿using IPA.Config.Data;
+using IPA.Config.Stores;
+using IPA.Config.Stores.Converters;
+using System;
 using System.Collections.Generic;
 using Version = SemVer.Version;
 
@@ -193,7 +196,7 @@ namespace IPA.Utilities
         }
 
         /// <summary>
-        /// Compares two versions, only taking into account the numeric part of the version if they are stored as <see cref="Version"/><see langword="sealed"/>,
+        /// Compares two versions, only taking into account the numeric part of the version if they are stored as <see cref="Version"/>s,
         /// or strict equality if they are stored as <see cref="string"/>s.
         /// </summary>
         /// <remarks>
@@ -216,7 +219,7 @@ namespace IPA.Utilities
         }
 
         /// <summary>
-        /// The opposite of <see cref="operator ==(AlmostVersion, AlmostVersion)"/>. Equivalent to <code>!(l == r)</code>.
+        /// The opposite of <see cref="operator ==(AlmostVersion, AlmostVersion)"/>. Equivalent to <c>!(l == r)</c>.
         /// </summary>
         /// <param name="l">the first value to compare</param>
         /// <param name="r">the second value to compare</param>
@@ -240,5 +243,28 @@ namespace IPA.Utilities
         /// <param name="av">the <see cref="AlmostVersion"/> to convert to a <see cref="Version"/></param>
         /// <seealso cref="SemverValue"/>
         public static implicit operator Version(AlmostVersion av) => av?.SemverValue;
+    }
+
+    /// <summary>
+    /// A <see cref="ValueConverter{T}"/> for <see cref="AlmostVersion"/>s.
+    /// </summary>
+    public sealed class AlmostVersionConverter : ValueConverter<AlmostVersion>
+    {
+        /// <summary>
+        /// Converts a <see cref="Text"/> node into an <see cref="AlmostVersion"/>.
+        /// </summary>
+        /// <param name="value">the <see cref="Text"/> node to convert</param>
+        /// <param name="parent">the owner of the new object</param>
+        /// <returns></returns>
+        public override AlmostVersion FromValue(Value value, object parent)
+            => new AlmostVersion(Converter<string>.Default.FromValue(value, parent));
+        /// <summary>
+        /// Converts an <see cref="AlmostVersion"/> to a <see cref="Text"/> node.
+        /// </summary>
+        /// <param name="obj">the <see cref="AlmostVersion"/> to convert</param>
+        /// <param name="parent">the parent of <paramref name="obj"/></param>
+        /// <returns>a <see cref="Text"/> node representing <paramref name="obj"/></returns>
+        public override Value ToValue(AlmostVersion obj, object parent)
+            => Value.From(obj.ToString());
     }
 }

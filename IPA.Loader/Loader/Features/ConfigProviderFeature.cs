@@ -5,7 +5,7 @@ namespace IPA.Loader.Features
 {
     internal class ConfigProviderFeature : Feature
     {
-        public override bool Initialize(PluginLoader.PluginMetadata meta, string[] parameters)
+        public override bool Initialize(PluginMetadata meta, string[] parameters)
         {// parameters should be (fully qualified name of provider type)
             if (parameters.Length != 1)
             {
@@ -39,7 +39,7 @@ namespace IPA.Loader.Features
                         goto hasFilename;
                     case BadImageFormatException bi:
                         filename = bi.FileName;
-                        hasFilename:
+                    hasFilename:
                         InvalidMessage = $"Could not find {filename} while loading type";
                         break;
                     default:
@@ -57,7 +57,7 @@ namespace IPA.Loader.Features
             }
             catch (Exception e)
             {
-                InvalidMessage = $"Error generated while creating delegate: {e}";
+                InvalidMessage = $"Error while registering config provider: {e}";
                 return false;
             }
         }

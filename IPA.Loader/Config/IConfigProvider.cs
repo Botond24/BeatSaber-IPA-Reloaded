@@ -1,63 +1,76 @@
 ﻿using System;
-// ReSharper disable UnusedMember.Global
+using System.IO;
+using System.Threading.Tasks;
+using IPA.Config.Data;
 
 namespace IPA.Config
 {
     /// <summary>
     /// An interface for configuration providers.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Implementers must provide a default constructor. Do not assume that <see cref="File"/> will ever be set for a given object.
+    /// </para>
+    /// <para>
+    /// Implementers are expected to preserve the typing of values passed to <see cref="Store"/> when returned from <see cref="Load"/>.
+    /// The only exceptions to this are the numeric types, <see cref="Integer"/> and <see cref="FloatingPoint"/>, since they can be coerced
+    /// to each other with <see cref="Integer.AsFloat"/> and <see cref="FloatingPoint.AsInteger"/> respectively. The provider <i>should</i>
+    /// however store and recover <see cref="Integer"/> with as much precision as is possible. For example, a JSON provider may decide to
+    /// decode all numbers that have an integral value, even if they were originally <see cref="FloatingPoint"/>, as <see cref="Integer"/>.
+    /// This is reasonable, as <see cref="Integer"/> is more precise, particularly with larger values, than <see cref="FloatingPoint"/>.
+    /// </para>
+    /// </remarks>
     public interface IConfigProvider
     {
         /// <summary>
-        /// Loads the data provided by this <see cref="IConfigProvider"/> into an object of type <typeparamref name="T"/>.
+        /// Gets the extension <i>without</i> a dot to use for files handled by this provider.
         /// </summary>
-        /// <typeparam name="T">the type of the object to parse into</typeparam>
-        /// <returns>the values from the config provider parsed into the object</returns>
-        T Parse<T>();
-        /// <summary>
-        /// Stores the data from <paramref name="obj"/> into the <see cref="IConfigProvider"/>.
-        /// </summary>
-        /// <typeparam name="T">the type of <paramref name="obj"/></typeparam>
-        /// <param name="obj">the object containing the data to save</param>
-        void Store<T>(T obj);
+        /// <remarks>
+        /// This must work immediately, and is used to generate the <see cref="FileInfo"/> used to set
+        /// <see cref="File"/>.
+        /// </remarks>
+        string Extension { get; }
 
-#if NET4
         /// <summary>
-        /// Gets a dynamic object providing access to the configuration.
+        /// Stores the <see cref="Value"/> given to disk in the format specified.
         /// </summary>
-        /// <value>a dynamically bound object to use to access config values directly</value>
-        dynamic Dynamic { get; }
-#endif
+        /// <param name="value">the <see cref="Value"/> to store</param>
+        /// <param name="file">the file to write to</param>
+        void Store(Value value, FileInfo file);
 
-#region State getters
         /// <summary>
-        /// Returns <see langword="true"/> if object has changed since the last save
+        /// Loads a <see cref="Value"/> from disk in whatever format this provider provides
+        /// and returns it.
         /// </summary>
-        /// <value><see langword="true"/> if object has changed since the last save, else <see langword="false"/></value>
-        bool HasChanged { get; }
+        /// <param name="file">the file to read from</param>
+        /// <returns>the <see cref="Value"/> loaded</returns>
+        Value Load(FileInfo file);
+    }
+
+    /// <summary>
+    /// A wrapper for an <see cref="IConfigProvider"/> and the <see cref="FileInfo"/> to use with it.
+    /// </summary>
+    public class ConfigProvider // this *should* be a struct imo, but mono doesn't seem to like that
+    {
+        private readonly FileInfo file;
+        private readonly IConfigProvider provider;
+
+        internal ConfigProvider(FileInfo file, IConfigProvider provider)
+        {
+            this.file = file; this.provider = provider;
+        }
+
         /// <summary>
-        /// Returns <see langword="true"/> if the data in memory has been changed - notably including loads.
+        /// Stores the <see cref="Value"/> given to disk in the format specified.
         /// </summary>
-        /// <value><see langword="true"/> if the data in memory has been changed, else <see langword="false"/></value>
-        bool InMemoryChanged { get; set; }
+        /// <param name="value">the <see cref="Value"/> to store</param>
+        public void Store(Value value) => provider.Store(value, file);
         /// <summary>
-        /// Will be set with the filename (no extension) to save to. When saving, the implementation should add the appropriate extension. Should error if set multiple times.
+        /// Loads a <see cref="Value"/> from disk in whatever format this provider provides
+        /// and returns it.
         /// </summary>
-        /// <value>the extensionless filename to save to</value>
-        string Filename { set; }
-        /// <summary>
-        /// Gets the last time the config was modified.
-        /// </summary>
-        /// <value>the last time the config file was modified</value>
-        DateTime LastModified { get; }
-        /// <summary>
-        /// Saves configuration to file. Should error if not a root object.
-        /// </summary>
-        void Save();
-        /// <summary>
-        /// Loads the state of the file on disk.
-        /// </summary>
-        void Load();
-#endregion
+        /// <returns>the <see cref="Value"/> loaded</returns>
+        public Value Load() => provider.Load(file);
     }
 }

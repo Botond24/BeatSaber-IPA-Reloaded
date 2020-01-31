@@ -5,17 +5,16 @@
     "#![IPA.Loader.description.md]",
     "A mod loader specifically for Beat Saber."
   ],
-  "gameVersion": "1.6.0",
+  "gameVersion": "1.6.2",
   "id": "BSIPA",
   "name": "Beat Saber IPA",
-  "version": "3.13.5",
+  "version": "4.0.0-beta.5",
   "icon": "IPA.icon_white.png",
   "features": [
     "define-feature(print, IPA.Loader.Features.PrintFeature)",
     "define-feature(debug, IPA.Loader.Features.DebugFeature)",
     "define-feature(warn, IPA.Loader.Features.WarnFeature)",
     "define-feature(no-update, IPA.Loader.Features.NoUpdateFeature)",
-    "define-feature(add-in, IPA.Loader.Features.AddInFeature)",
     "define-feature(init-injector, IPA.Loader.Features.InitInjectorFeature)",
     "define-feature(config-provider, IPA.Loader.Features.ConfigProviderFeature)"
   ],

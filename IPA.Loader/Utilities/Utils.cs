@@ -3,6 +3,8 @@ using System.IO;
 using System.Text;
 using System.Linq;
 using System.Collections.Generic;
+using Mono.Cecil;
+using System.Runtime.CompilerServices;
 #if NET3
 using File = Net3_Proxy.File;
 #endif
@@ -177,7 +179,7 @@ namespace IPA.Utilities
         /// </summary>
         /// <param name="l">the left value</param>
         /// <param name="r">the right value</param>
-        /// <returns>-1 if l is less than r, 0 if they are equal in the numeric portion, or 1 if l is greater than r</returns>
+        /// <returns>&lt; 0 if l is less than r, 0 if they are equal in the numeric portion, or &gt; 0 if l is greater than r</returns>
         public static int VersionCompareNoPrerelease(SemVer.Version l, SemVer.Version r)
         {
             var cmpVal = l.Major - r.Major;
@@ -188,8 +190,51 @@ namespace IPA.Utilities
             return cmpVal;
         }
 
+        /// <summary>
+        /// An object used to manage scope guards.
+        /// </summary>
+        /// <example>
+        /// <code>
+        /// using var _ = new Utils.ScopeGuardObject(() => RunOnScopeExit(value));
+        /// </code>
+        /// </example>
+        /// <seealso cref="ScopeGuard(Action)"/>
+        public struct ScopeGuardObject : IDisposable
+        {
+            private readonly Action action;
+            /// <summary>
+            /// Creates a new scope guard that will invoke <paramref name="action"/> when disposed.
+            /// </summary>
+            /// <param name="action">the action to run on dispose</param>
+            public ScopeGuardObject(Action action)
+                => this.action = action;
+            void IDisposable.Dispose()
+                => action?.Invoke();
+        }
+
+        /// <summary>
+        /// Creates a scope guard for a given <see cref="Action"/>.
+        /// </summary>
+        /// <param name="action">the <see cref="Action"/> to run on dispose</param>
+        /// <returns>a <see cref="ScopeGuardObject"/> that will run <paramref name="action"/> on disposal</returns>
+        /// <example>
+        /// <code>
+        /// using var _ = Utils.ScopeGuard(() => RunOnScopeExit(value));
+        /// </code>
+        /// </example>
+        public static ScopeGuardObject ScopeGuard(Action action)
+            => new ScopeGuardObject(action);
+
+        internal static bool HasInterface(this TypeDefinition type, string interfaceFullName)
+        {
+            return (type?.Interfaces?.Any(i => i.InterfaceType.FullName == interfaceFullName) ?? false)
+                    || (type?.Interfaces?.Any(t => HasInterface(t?.InterfaceType?.Resolve(), interfaceFullName)) ?? false);
+        }
+
 #if NET4
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static IEnumerable<string> StrJP(this IEnumerable<string> a) => a;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static IEnumerable<string> StrJP<T>(this IEnumerable<T> a) => a.Select(o => $"{o}" /* safer than .ToString() */);
 #endif
 #if NET3

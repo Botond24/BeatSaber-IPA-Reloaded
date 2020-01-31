@@ -1,45 +1,55 @@
 ﻿using IPA.Old;
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Logger = IPA.Logging.Logger;
 
 namespace IPA.Loader.Composite
 {
 #pragma warning disable CS0618 // Type or member is obsolete
-    internal class CompositeIPAPlugin : IPlugin
+    internal class CompositeIPAPlugin : Old.IPlugin
     {
-        private readonly IEnumerable<IPlugin> plugins;
+        private readonly IEnumerable<Old.IPlugin> plugins;
 
-        private delegate void CompositeCall(IPlugin plugin);
+        private delegate void CompositeCall(Old.IPlugin plugin);
         
-        public CompositeIPAPlugin(IEnumerable<IPlugin> plugins) {
+        public CompositeIPAPlugin(IEnumerable<Old.IPlugin> plugins) 
+        {
             this.plugins = plugins;
         }
 
-        public void OnApplicationStart() {
+        public void OnApplicationStart() 
+        {
             Invoke(plugin => plugin.OnApplicationStart());
         }
 
-        public void OnApplicationQuit() {
+        public void OnApplicationQuit() 
+        {
             Invoke(plugin => plugin.OnApplicationQuit());
         }
         
-        private void Invoke(CompositeCall callback) {
-            foreach (var plugin in plugins) {
-                try {
+        private void Invoke(CompositeCall callback, [CallerMemberName] string member = "") 
+        {
+            foreach (var plugin in plugins) 
+            {
+                try 
+                {
                     callback(plugin);
                 }
-                catch (Exception ex) {
-                    Logger.log.Error($"{plugin.Name}: {ex}");
+                catch (Exception ex) 
+                {
+                    Logger.log.Error($"{plugin.Name} {member}: {ex}");
                 }
             }
         }
 
-        public void OnUpdate() {
+        public void OnUpdate() 
+        {
             Invoke(plugin => plugin.OnUpdate());
         }
 
-        public void OnFixedUpdate() {
+        public void OnFixedUpdate() 
+        {
             Invoke(plugin => plugin.OnFixedUpdate());
         }
         
@@ -47,9 +57,10 @@ namespace IPA.Loader.Composite
 
         public string Version => throw new InvalidOperationException();
 
-        public void OnLateUpdate() {
+        public void OnLateUpdate() 
+        {
             Invoke(plugin => {
-                if (plugin is IEnhancedPlugin saberPlugin)
+                if (plugin is Old.IEnhancedPlugin saberPlugin)
                     saberPlugin.OnLateUpdate();
             });
         }

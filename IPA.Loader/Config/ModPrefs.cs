@@ -103,7 +103,7 @@ namespace IPA.Config
         /// Constructs a ModPrefs object for the provide plugin.
         /// </summary>
         /// <param name="plugin">the plugin to get the preferences file for</param>
-        public ModPrefs(PluginLoader.PluginMetadata plugin) {
+        public ModPrefs(PluginMetadata plugin) {
             _instance = new IniFile(Path.Combine(Environment.CurrentDirectory, "UserData", "ModPrefs",
                 $"{plugin.Name}.ini"));
         }
@@ -201,7 +201,7 @@ namespace IPA.Config
 
         bool IModPrefs.HasKey(string section, string name)
         {
-            return _instance.IniReadValue(section, name) != null;
+            return (_instance.IniReadValue(section, name)?.Length ?? 0) > 0;
         }
         /// <summary>
         /// Checks whether or not a key exists in the ini.

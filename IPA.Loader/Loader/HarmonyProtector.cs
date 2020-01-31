@@ -4,12 +4,17 @@ using System.Reflection;
 
 namespace IPA.Loader
 {
+    internal static class HarmonyProtectorProxy
+    {
+        public static void ProtectNull() => HarmonyProtector.Protect();
+    }
+
     internal static class HarmonyProtector
     {
         private static HarmonyInstance instance;
         private static Assembly selfAssem;
         private static Assembly harmonyAssem;
-
+        
         public static void Protect(HarmonyInstance inst = null)
         {
             selfAssem = Assembly.GetExecutingAssembly();
@@ -29,7 +34,7 @@ namespace IPA.Loader
             inst.Patch(target, new HarmonyMethod(patch));
         }
 
-        private static void PatchProcessor_Patch_Prefix(PatchProcessor __instance, ref List<MethodBase> ___originals)
+        private static void PatchProcessor_Patch_Prefix(ref List<MethodBase> ___originals)
         {
             for (int i = 0; i < ___originals.Count; i++)
             {

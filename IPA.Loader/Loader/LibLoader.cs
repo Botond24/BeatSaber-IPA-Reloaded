@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Linq;
 using IPA.Logging;
+using IPA.Utilities;
 using Mono.Cecil;
 #if NET3
 using Net3_Proxy;
@@ -19,20 +20,27 @@ namespace IPA.Loader
 {
     internal class CecilLibLoader : BaseAssemblyResolver
     {
+        private static string CurrentAssemblyName = Assembly.GetExecutingAssembly().GetName().Name;
+        private static string CurrentAssemblyPath = Assembly.GetExecutingAssembly().Location;
+
         public override AssemblyDefinition Resolve(AssemblyNameReference name, ReaderParameters parameters)
         {
             LibLoader.SetupAssemblyFilenames();
 
-            if (LibLoader.FilenameLocations.TryGetValue($"{name.Name}.{name.Version}.dll", out var path))
+            if (name.Name == CurrentAssemblyName)
+                return AssemblyDefinition.ReadAssembly(CurrentAssemblyPath, parameters);
+
+            if (LibLoader.FilenameLocations.TryGetValue($"{name.Name}.dll", out var path))
             {
                 if (File.Exists(path))
                     return AssemblyDefinition.ReadAssembly(path, parameters);
             }
-            else if (LibLoader.FilenameLocations.TryGetValue($"{name.Name}.dll", out path))
+            else if (LibLoader.FilenameLocations.TryGetValue($"{name.Name}.{name.Version}.dll", out path))
             {
                 if (File.Exists(path))
                     return AssemblyDefinition.ReadAssembly(path, parameters);
             }
+
 
             return base.Resolve(name, parameters);
         }
@@ -46,9 +54,9 @@ namespace IPA.Loader
 
         internal static void Configure()
         {
+            SetupAssemblyFilenames(true);
             AppDomain.CurrentDomain.AssemblyResolve -= AssemblyLibLoader;
             AppDomain.CurrentDomain.AssemblyResolve += AssemblyLibLoader;
-            SetupAssemblyFilenames(true);
         }
 
         internal static void SetupAssemblyFilenames(bool force = false)
@@ -78,7 +86,7 @@ namespace IPA.Loader
                     if (retPtr == IntPtr.Zero)
                     {
                         var err = new Win32Exception();
-                        Log(Logger.Level.Warning, $"Could not add DLL directory");
+                        Log(Logger.Level.Warning, $"Could not add DLL directory {path}");
                         Log(Logger.Level.Warning, err);
                     }
                 }
@@ -92,8 +100,8 @@ namespace IPA.Loader
                     }).All(f => true); // force it to iterate all
                 }
 
-                var unityData = Directory.EnumerateDirectories(Environment.CurrentDirectory, "*_Data").First();
-                AddDir(Path.Combine(unityData, "Plugins"));
+                //var unityData = Directory.EnumerateDirectories(Environment.CurrentDirectory, "*_Data").First();
+                //AddDir(Path.Combine(unityData, "Plugins"));
 
                 foreach (var dir in Environment.GetEnvironmentVariable("path").Split(Path.PathSeparator))
                     AddDir(dir);
@@ -113,9 +121,9 @@ namespace IPA.Loader
             SetupAssemblyFilenames();
 
             var testFile = $"{asmName.Name}.{asmName.Version}.dll";
-            Log(Logger.Level.Debug, $"Looking for file {testFile}");
+            Log(Logger.Level.Debug, $"Looking for file {asmName.Name}.dll");
 
-            if (FilenameLocations.TryGetValue(testFile, out var path))
+            if (FilenameLocations.TryGetValue(testFile = $"{asmName.Name}.dll", out var path))
             {
                 Log(Logger.Level.Debug, $"Found file {testFile} as {path}");
                 if (File.Exists(path))
@@ -123,9 +131,10 @@ namespace IPA.Loader
 
                 Log(Logger.Level.Critical, $"but {path} no longer exists!");
             }
-            else if (FilenameLocations.TryGetValue(testFile = $"{asmName.Name}.dll", out path))
+            else if (FilenameLocations.TryGetValue(testFile, out path))
             {
                 Log(Logger.Level.Debug, $"Found file {testFile} as {path}");
+                Log(Logger.Level.Warning, $"File {testFile} should be renamed to just {asmName.Name}.dll");
                 if (File.Exists(path))
                     return Assembly.LoadFrom(path);
 

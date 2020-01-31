@@ -28,7 +28,7 @@ namespace IPA.Loader.Features
         /// <param name="meta">the metadata of the plugin that is being prepared</param>
         /// <param name="parameters">the parameters passed to the feature definition, or null</param>
         /// <returns><see langword="true"/> if the feature is valid for the plugin, <see langword="false"/> otherwise</returns>
-        public abstract bool Initialize(PluginLoader.PluginMetadata meta, string[] parameters);
+        public abstract bool Initialize(PluginMetadata meta, string[] parameters);
 
         /// <summary>
         /// Evaluates the Feature for use in conditional meta-Features. This should be re-calculated on every call, unless it can be proven to not change.
@@ -54,33 +54,33 @@ namespace IPA.Loader.Features
         /// </remarks>
         /// <param name="plugin">the plugin about to be loaded</param>
         /// <returns>whether or not the plugin should be loaded</returns>
-        public virtual bool BeforeLoad(PluginLoader.PluginMetadata plugin) => true;
+        public virtual bool BeforeLoad(PluginMetadata plugin) => true;
 
         /// <summary>
         /// Called before a plugin's `Init` method is called. This will not be called if there is no `Init` method. This should never throw an exception. An exception will abort the loading of the plugin with an error.
         /// </summary>
         /// <param name="plugin">the plugin to be initialized</param>
         /// <returns>whether or not to call the Init method</returns>
-        public virtual bool BeforeInit(PluginLoader.PluginInfo plugin) => true;
+        public virtual bool BeforeInit(PluginMetadata plugin) => true;
 
         /// <summary>
         /// Called after a plugin has been fully initialized, whether or not there is an `Init` method. This should never throw an exception.
         /// </summary>
         /// <param name="plugin">the plugin that was just initialized</param>
         /// <param name="pluginInstance">the instance of the plugin being initialized</param>
-        public virtual void AfterInit(PluginLoader.PluginInfo plugin, IBeatSaberPlugin pluginInstance) => AfterInit(plugin);
+        public virtual void AfterInit(PluginMetadata plugin, object pluginInstance) => AfterInit(plugin);
 
         /// <summary>
         /// Called after a plugin has been fully initialized, whether or not there is an `Init` method. This should never throw an exception.
         /// </summary>
         /// <param name="plugin">the plugin that was just initialized</param>
-        public virtual void AfterInit(PluginLoader.PluginInfo plugin) { }
+        public virtual void AfterInit(PluginMetadata plugin) { }
 
         /// <summary>
         /// Ensures a plugin's assembly is loaded. Do not use unless you need to.
         /// </summary>
         /// <param name="plugin">the plugin to ensure is loaded.</param>
-        protected void RequireLoaded(PluginLoader.PluginMetadata plugin) => PluginLoader.Load(plugin);
+        protected void RequireLoaded(PluginMetadata plugin) => PluginLoader.Load(plugin);
 
         /// <summary>
         /// Defines whether or not this feature will be accessible from the plugin metadata once loaded.
@@ -127,7 +127,7 @@ namespace IPA.Loader.Features
         }
 
         // returns false with both outs null for no such feature
-        internal static bool TryParseFeature(string featureString, PluginLoader.PluginMetadata plugin,
+        internal static bool TryParseFeature(string featureString, PluginMetadata plugin,
             out Feature feature, out Exception failException, out bool featureValid, out FeatureParse parsed,
             FeatureParse? preParsed = null)
         {

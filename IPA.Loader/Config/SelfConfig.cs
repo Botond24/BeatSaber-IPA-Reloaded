@@ -1,8 +1,12 @@
 ﻿// BEGIN: section ignore
 using IPA.Logging;
 using IPA.Utilities;
+using IPA.Config.Stores;
+using IPA.Config.Stores.Attributes;
+using IPA.Config.Stores.Converters;
 // END: section ignore
 using Newtonsoft.Json;
+using System.Collections.Generic;
 
 namespace IPA.Config
 {
@@ -11,31 +15,27 @@ namespace IPA.Config
         // This is to allow the doc generation to parse this file and use Newtonsoft to generate a JSON schema
         // BEGIN: section ignore
 
-        private static IConfigProvider _loaderConfig;
+        public static Config LoaderConfig { get; set; }
 
-        public static IConfigProvider LoaderConfig
-        {
-            get => _loaderConfig;
-            set
-            {
-                _loaderConfig?.RemoveLinks();
-                value.Load();
-                SelfConfigRef = value.MakeLink<SelfConfig>((c, v) =>
-                {
-                    if (v.Value.Regenerate)
-                        c.Store(v.Value = new SelfConfig { Regenerate = false });
-
-                    StandardLogger.Configure(v.Value);
-                });
-                _loaderConfig = value;
-            }
-        }
-
-        public static Ref<SelfConfig> SelfConfigRef = new SelfConfig();
+        public static SelfConfig Instance = new SelfConfig();
 
         public static void Load()
         {
-            LoaderConfig = Config.GetProviderFor(IPAName, "json");
+            LoaderConfig = Config.GetConfigFor(IPAName, "json");
+            Instance = LoaderConfig.Generated<SelfConfig>();
+        }
+
+        protected virtual void CopyFrom(SelfConfig cfg) { }
+        protected internal virtual void OnReload()
+        {
+            if (Regenerate)
+                CopyFrom(new SelfConfig { Regenerate = false });
+            StandardLogger.Configure();
+        }
+
+        protected internal virtual void Changed()
+        {
+            Logger.log.Debug("SelfConfig Changed called");
         }
 
         public static void ReadCommandLine(string[] args)
@@ -67,7 +67,7 @@ namespace IPA.Config
         }
 
         internal const string IPAName = "Beat Saber IPA";
-        internal const string IPAVersion = "3.13.5";
+        internal const string IPAVersion = "3.99.99.5";
 
         // uses Updates.AutoUpdate, Updates.AutoCheckUpdates, YeetMods, Debug.ShowCallSource, Debug.ShowDebug, 
         //      Debug.CondenseModLogs
@@ -75,69 +75,87 @@ namespace IPA.Config
 
         // END: section ignore
 
-        public bool Regenerate = true;
+        public virtual bool Regenerate { get; set; } = true;
 
         public class Updates_
         {
-            public bool AutoUpdate = true;
+            public virtual bool AutoUpdate { get; set; } = true;
             // LINE: ignore 2
-            public static bool AutoUpdate_ => SelfConfigRef.Value.Updates.AutoUpdate
+            public static bool AutoUpdate_ => (Instance?.Updates?.AutoUpdate ?? true)
                                            &&   CommandLineValues.Updates.AutoUpdate;
 
-            public bool AutoCheckUpdates = true;
+            public virtual bool AutoCheckUpdates { get; set; } = true;
             // LINE: ignore 2
-            public static bool AutoCheckUpdates_ => SelfConfigRef.Value.Updates.AutoCheckUpdates
+            public static bool AutoCheckUpdates_ => (Instance?.Updates?.AutoCheckUpdates ?? true)
                                                  &&   CommandLineValues.Updates.AutoCheckUpdates;
         }
 
-        public Updates_ Updates = new Updates_();
+        // LINE: ignore
+        [NonNullable]
+        public virtual Updates_ Updates { get; set; } = new Updates_();
 
         public class Debug_
         {
-            public bool ShowCallSource = false;
+            public virtual bool ShowCallSource { get; set; } = false;
             // LINE: ignore 2
-            public static bool ShowCallSource_ => SelfConfigRef.Value.Debug.ShowCallSource
+            public static bool ShowCallSource_ => (Instance?.Debug?.ShowCallSource ?? false)
                                                ||   CommandLineValues.Debug.ShowCallSource;
 
-            public bool ShowDebug = false;
+            public virtual bool ShowDebug { get; set; } = false;
             // LINE: ignore 2
-            public static bool ShowDebug_ => SelfConfigRef.Value.Debug.ShowDebug
+            public static bool ShowDebug_ => (Instance?.Debug?.ShowDebug ?? false)
                                           ||   CommandLineValues.Debug.ShowDebug;
 
             // This option only takes effect after a full game restart, unless new logs are created again
-            public bool CondenseModLogs = false;
+            public virtual bool CondenseModLogs { get; set; } = false;
             // LINE: ignore 2
-            public static bool CondenseModLogs_ => SelfConfigRef?.Value.Debug.CondenseModLogs ?? false
+            public static bool CondenseModLogs_ => (Instance?.Debug?.CondenseModLogs ?? false)
                                                 ||   CommandLineValues.Debug.CondenseModLogs;
 
-            public bool ShowHandledErrorStackTraces = false;
+            public virtual bool ShowHandledErrorStackTraces { get; set; } = false;
             // LINE: ignore
-            public static bool ShowHandledErrorStackTraces_ => SelfConfigRef.Value.Debug.ShowHandledErrorStackTraces;
+            public static bool ShowHandledErrorStackTraces_ => Instance?.Debug?.ShowHandledErrorStackTraces ?? false;
 
-            public bool HideMessagesForPerformance = true;
+            public virtual bool HideMessagesForPerformance { get; set; } = true;
             // LINE: ignore
-            public static bool HideMessagesForPerformance_ => SelfConfigRef.Value.Debug.HideMessagesForPerformance;
+            public static bool HideMessagesForPerformance_ => Instance?.Debug?.HideMessagesForPerformance ?? true;
 
-            public int HideLogThreshold = 512;
+            public virtual int HideLogThreshold { get; set; } = 512;
             // LINE: ignore
-            public static int HideLogThreshold_ => SelfConfigRef.Value.Debug.HideLogThreshold;
+            public static int HideLogThreshold_ => Instance?.Debug?.HideLogThreshold ?? 512;
 
-            public bool ShowTrace = false;
+            public virtual bool ShowTrace { get; set; } = false;
             // LINE: ignore 2
-            public static bool ShowTrace_ => SelfConfigRef.Value.Debug.ShowTrace
+            public static bool ShowTrace_ => (Instance?.Debug?.ShowTrace ?? false)
                                           ||   CommandLineValues.Debug.ShowTrace;
         }
 
-        public Debug_ Debug = new Debug_();
+        // LINE: ignore
+        [NonNullable]
+        public virtual Debug_ Debug { get; set; } = new Debug_();
 
-        public bool YeetMods = true;
+        public virtual bool YeetMods { get; set; } = true;
         // LINE: ignore 2
-        public static bool YeetMods_ => SelfConfigRef.Value.YeetMods 
+        public static bool YeetMods_ => (Instance?.YeetMods ?? true)
                                      &&   CommandLineValues.YeetMods;
 
-        [JsonProperty(Required = Required.Default)]
-        public string LastGameVersion = null;
         // LINE: ignore
-        public static string LastGameVersion_ => SelfConfigRef.Value.LastGameVersion;
+        [NonNullable, UseConverter(typeof(CollectionConverter<string, HashSet<string>>))]
+        public virtual HashSet<string> GameAssemblies { get; set; } = new HashSet<string>
+            {
+            // LINE: ignore 5
+#if BeatSaber // provide these defaults only for Beat Saber builds
+                "MainAssembly.dll", "HMLib.dll", "HMUI.dll", "VRUI.dll"
+#else // otherwise specify Assembly-CSharp.dll
+                "Assembly-CSharp.dll"
+#endif
+            };
+        // LINE: ignore
+        public static HashSet<string> GameAssemblies_ => Instance?.GameAssemblies ?? new HashSet<string> { "Assembly-CSharp.dll" };
+
+        [JsonProperty(Required = Required.DisallowNull)] // Used for documentation schema generation
+        public virtual string LastGameVersion { get; set; } = null;
+        // LINE: ignore
+        public static string LastGameVersion_ => Instance?.LastGameVersion;
     }
 }
