@@ -151,7 +151,7 @@ namespace IPA.Injector
                 // this is a critical section because if you exit in here, CoreModule can die
                 using var critSec = CriticalSection.ExecuteSection();
 
-                var unityAsmDef = AssemblyDefinition.ReadAssembly(unityPath, new ReaderParameters
+                using var unityAsmDef = AssemblyDefinition.ReadAssembly(unityPath, new ReaderParameters
                 {
                     ReadWrite = false,
                     InMemory = true,
@@ -172,11 +172,11 @@ namespace IPA.Injector
                     }
                 }
 
-                var application = unityModDef.GetType("UnityEngine", "Application");
+                var application = unityModDef.GetType("UnityEngine", "Camera");
 
                 if (application == null)
                 {
-                    injector.Critical("UnityEngine.CoreModule doesn't have a definition for UnityEngine.Application!"
+                    injector.Critical("UnityEngine.CoreModule doesn't have a definition for UnityEngine.Camera!"
                         + "Nothing to patch to get ourselves into the Unity run cycle!");
                     goto endPatchCoreModule;
                 }
@@ -270,7 +270,7 @@ namespace IPA.Injector
                     {
                         injector.Debug("Applying anti-yeet patch");
 
-                        var ascAsmDef = AssemblyDefinition.ReadAssembly(ascPath, new ReaderParameters
+                        using var ascAsmDef = AssemblyDefinition.ReadAssembly(ascPath, new ReaderParameters
                         {
                             ReadWrite = false,
                             InMemory = true,
@@ -334,10 +334,6 @@ namespace IPA.Injector
             log.Debug("Plugins loaded");
             log.Debug(string.Join(", ", PluginLoader.PluginsMetadata.StrJP()));
             PluginComponent.Create();
-
-#if DEBUG
-            Config.Stores.GeneratedStoreImpl.DebugSaveAssembly("GeneratedAssembly.dll");
-#endif
         }
     }
 }

@@ -20,8 +20,8 @@ namespace IPA.Loader
 {
     internal class CecilLibLoader : BaseAssemblyResolver
     {
-        private static string CurrentAssemblyName = Assembly.GetExecutingAssembly().GetName().Name;
-        private static string CurrentAssemblyPath = Assembly.GetExecutingAssembly().Location;
+        private static readonly string CurrentAssemblyName = Assembly.GetExecutingAssembly().GetName().Name;
+        private static readonly string CurrentAssemblyPath = Assembly.GetExecutingAssembly().Location;
 
         public override AssemblyDefinition Resolve(AssemblyNameReference name, ReaderParameters parameters)
         {
@@ -80,7 +80,7 @@ namespace IPA.Loader
                     return;
                 }
 
-                void AddDir(string path)
+                static void AddDir(string path)
                 {
                     var retPtr = AddDllDirectory(path);
                     if (retPtr == IntPtr.Zero)
@@ -120,10 +120,10 @@ namespace IPA.Loader
 
             SetupAssemblyFilenames();
 
-            var testFile = $"{asmName.Name}.{asmName.Version}.dll";
+            var testFile = $"{asmName.Name}.dll";
             Log(Logger.Level.Debug, $"Looking for file {asmName.Name}.dll");
 
-            if (FilenameLocations.TryGetValue(testFile = $"{asmName.Name}.dll", out var path))
+            if (FilenameLocations.TryGetValue(testFile, out var path))
             {
                 Log(Logger.Level.Debug, $"Found file {testFile} as {path}");
                 if (File.Exists(path))
@@ -131,7 +131,7 @@ namespace IPA.Loader
 
                 Log(Logger.Level.Critical, $"but {path} no longer exists!");
             }
-            else if (FilenameLocations.TryGetValue(testFile, out path))
+            else if (FilenameLocations.TryGetValue(testFile = $"{asmName.Name}.{asmName.Version}.dll", out path))
             {
                 Log(Logger.Level.Debug, $"Found file {testFile} as {path}");
                 Log(Logger.Level.Warning, $"File {testFile} should be renamed to just {asmName.Name}.dll");

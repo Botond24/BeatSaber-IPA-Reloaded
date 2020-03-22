@@ -46,7 +46,7 @@ namespace IPA.Config.Stores
         /// <typeparamref name="T"/> must be a public non-<see langword="sealed"/> class.
         /// It can also be internal, but in that case, then your assembly must have the following attribute
         /// to allow the generated code to reference it.
-        /// <code>
+        /// <code lang="csharp">
         /// [assembly: InternalsVisibleTo(IPA.Config.Stores.GeneratedStore.AssemblyVisibilityTarget)]
         /// </code>
         /// </para>
@@ -64,7 +64,7 @@ namespace IPA.Config.Stores
         /// method <c>Changed()</c>, then that method may be called to artificially signal to the runtime that the content of the object 
         /// has changed. That method will also be called after the write locks are released when a property is set anywhere in the owning
         /// tree. This will only be called on the outermost generated object of the config structure, even if the change being signaled
-        /// is somewhere deep into the tree. TODO: is this a good idea?
+        /// is somewhere deep into the tree.
         /// </para>
         /// <para>
         /// Similarly, <typeparamref name="T"/> can declare a public or protected, <see langword="virtual"/> 
@@ -148,7 +148,7 @@ namespace IPA.Config.Stores
         {
             private readonly IGeneratedStore generated;
             private bool inChangeTransaction = false;
-            private bool changedInTransaction = false;
+            //private bool changedInTransaction = false;
 
             internal static ConstructorInfo Ctor = typeof(Impl).GetConstructor(new[] { typeof(IGeneratedStore) });
             public Impl(IGeneratedStore store) => generated = store;
@@ -418,8 +418,8 @@ namespace IPA.Config.Stores
             {
                 var attrs = member.Member.GetCustomAttributes(true);
                 var ignores = attrs.Select(o => o as IgnoreAttribute).NonNull();
-                if (ignores.Any()) // we ignore
-                {
+                if (ignores.Any() || typeof(Delegate).IsAssignableFrom(member.Type))
+                { // we ignore delegates completely because there fundamentally is not a good way to serialize them
                     return false;
                 }
 
@@ -652,12 +652,20 @@ namespace IPA.Config.Stores
                     .Where(m => m.GetParameters().Length == 3).First()
                         .MakeGenericMethod(PropertyChangedEventHandler_t);
 
+                var basePropChangedEvent = type.GetEvents()
+                    .Where(e => e.AddMethod.GetBaseDefinition().DeclaringType == INotifyPropertyChanged_t)
+                    .FirstOrDefault();
+                var basePropChangedAdd = basePropChangedEvent?.AddMethod;
+                var basePropChangedRemove = basePropChangedEvent?.RemoveMethod;
+
                 var PropertyChanged_backing = typeBuilder.DefineField("<event>PropertyChanged", PropertyChangedEventHandler_t, FieldAttributes.Private);
 
                 var add_PropertyChanged = typeBuilder.DefineMethod("<add>PropertyChanged",
-                    MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Final | MethodAttributes.Virtual, 
+                    MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Final | MethodAttributes.Virtual,
                     null, new[] { PropertyChangedEventHandler_t });
                 typeBuilder.DefineMethodOverride(add_PropertyChanged, INotifyPropertyChanged_PropertyChanged.GetAddMethod());
+                if (basePropChangedAdd != null)
+                    typeBuilder.DefineMethodOverride(add_PropertyChanged, basePropChangedAdd);
 
                 {
                     var il = add_PropertyChanged.GetILGenerator();
@@ -690,9 +698,11 @@ namespace IPA.Config.Stores
                 }
 
                 var remove_PropertyChanged = typeBuilder.DefineMethod("<remove>PropertyChanged",
-                    MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Final | MethodAttributes.Virtual, 
+                    MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Final | MethodAttributes.Virtual,
                     null, new[] { PropertyChangedEventHandler_t });
                 typeBuilder.DefineMethodOverride(remove_PropertyChanged, INotifyPropertyChanged_PropertyChanged.GetRemoveMethod());
+                if (basePropChangedRemove != null)
+                    typeBuilder.DefineMethodOverride(remove_PropertyChanged, basePropChangedRemove);
 
                 {
                     var il = remove_PropertyChanged.GetILGenerator();
@@ -1260,6 +1270,7 @@ namespace IPA.Config.Stores
         #region Correction
         private static bool NeedsCorrection(SerializedMemberInfo member)
         {
+            if (member.HasConverter) return false;
             var expectType = GetExpectedValueTypeForType(member.IsNullable ? member.NullableWrappedType : member.Type);
 
             if (expectType == typeof(Map)) // TODO: make this slightly saner
@@ -1405,16 +1416,16 @@ namespace IPA.Config.Stores
             il.Emit(OpCodes.Call, Type_GetTypeFromHandle);
         }
 
-        private static Type IDisposable_t = typeof(IDisposable);
-        private static MethodInfo IDisposable_Dispose = IDisposable_t.GetMethod(nameof(IDisposable.Dispose));
+        private static readonly Type IDisposable_t = typeof(IDisposable);
+        private static readonly MethodInfo IDisposable_Dispose = IDisposable_t.GetMethod(nameof(IDisposable.Dispose));
 
-        private static Type Decimal_t = typeof(decimal);
-        private static ConstructorInfo Decimal_FromFloat = Decimal_t.GetConstructor(new[] { typeof(float) });
-        private static ConstructorInfo Decimal_FromDouble = Decimal_t.GetConstructor(new[] { typeof(double) });
-        private static ConstructorInfo Decimal_FromInt = Decimal_t.GetConstructor(new[] { typeof(int) });
-        private static ConstructorInfo Decimal_FromUInt = Decimal_t.GetConstructor(new[] { typeof(uint) });
-        private static ConstructorInfo Decimal_FromLong = Decimal_t.GetConstructor(new[] { typeof(long) });
-        private static ConstructorInfo Decimal_FromULong = Decimal_t.GetConstructor(new[] { typeof(ulong) });
+        private static readonly Type Decimal_t = typeof(decimal);
+        private static readonly ConstructorInfo Decimal_FromFloat = Decimal_t.GetConstructor(new[] { typeof(float) });
+        private static readonly ConstructorInfo Decimal_FromDouble = Decimal_t.GetConstructor(new[] { typeof(double) });
+        private static readonly ConstructorInfo Decimal_FromInt = Decimal_t.GetConstructor(new[] { typeof(int) });
+        private static readonly ConstructorInfo Decimal_FromUInt = Decimal_t.GetConstructor(new[] { typeof(uint) });
+        private static readonly ConstructorInfo Decimal_FromLong = Decimal_t.GetConstructor(new[] { typeof(long) });
+        private static readonly ConstructorInfo Decimal_FromULong = Decimal_t.GetConstructor(new[] { typeof(ulong) });
         private static void EmitNumberConvertTo(ILGenerator il, Type to, Type from)
         { // WARNING: THIS USES THE NO-OVERFLOW OPCODES
             if (to == from) return;
@@ -1604,6 +1615,29 @@ namespace IPA.Config.Stores
 
                 // for now, we assume that its a generated type implementing IGeneratedStore
                 var IGeneratedStore_Serialize = typeof(IGeneratedStore).GetMethod(nameof(IGeneratedStore.Serialize));
+                var IGeneratedStoreT_CopyFrom = typeof(IGeneratedStore<>).MakeGenericType(member.Type)
+                    .GetMethod(nameof(IGeneratedStore<object>.CopyFrom));
+
+                if (!member.IsVirtual)
+                {
+                    var noCreate = il.DefineLabel();
+                    var stlocal = GetLocal(member.Type);
+
+                    // first check to make sure that this is an IGeneratedStore, because we don't control assignments to it
+                    il.Emit(OpCodes.Dup);
+                    il.Emit(OpCodes.Isinst, typeof(IGeneratedStore));
+                    il.Emit(OpCodes.Brtrue_S, noCreate);
+                    il.Emit(OpCodes.Stloc, stlocal);
+                    EmitCreateChildGenerated(il, member.Type);
+                    il.Emit(OpCodes.Dup);
+                    il.Emit(OpCodes.Ldloc, stlocal);
+                    il.Emit(OpCodes.Ldc_I4_0);
+                    il.Emit(OpCodes.Callvirt, IGeneratedStoreT_CopyFrom);
+                    il.Emit(OpCodes.Dup);
+                    il.Emit(OpCodes.Stloc, stlocal);
+                    EmitStore(il, member, il => il.Emit(OpCodes.Ldloc, stlocal));
+                    il.MarkLabel(noCreate);
+                }
                 il.Emit(OpCodes.Callvirt, IGeneratedStore_Serialize);
             }
 
