@@ -15,6 +15,7 @@ namespace IPA.Loader
         private readonly HashSet<PluginMetadata> currentlyDisabled;
         private readonly HashSet<PluginMetadata> toEnable = new HashSet<PluginMetadata>();
         private readonly HashSet<PluginMetadata> toDisable = new HashSet<PluginMetadata>();
+        private bool stateChanged = false;
 
         internal StateTransitionTransaction(IEnumerable<PluginMetadata> enabled, IEnumerable<PluginMetadata> disabled)
         {
@@ -29,7 +30,14 @@ namespace IPA.Loader
         /// <exception cref="ObjectDisposedException">if this object has been disposed</exception>
         public bool WillNeedRestart
             => ThrowIfDisposed<bool>()
-            || toEnable.Concat(toDisable).Any(m => m.RuntimeOptions != RuntimeOptions.DynamicInit);
+            || (stateChanged && toEnable.Concat(toDisable).Any(m => m.RuntimeOptions != RuntimeOptions.DynamicInit));
+
+        /// <summary>
+        /// Gets whether or not the current state has changed.
+        /// </summary>
+        /// <value><see langword="true"/> if the current state of the transaction is different from its construction, <see langword="false"/> otherwise</value>
+        /// <exception cref="ObjectDisposedException">if this object has been disposed</exception>
+        public bool HasStateChanged => ThrowIfDisposed<bool>() || stateChanged;
 
         internal IEnumerable<PluginMetadata> CurrentlyEnabled => currentlyEnabled;
         internal IEnumerable<PluginMetadata> CurrentlyDisabled => currentlyDisabled;
@@ -41,7 +49,7 @@ namespace IPA.Loader
         /// </summary>
         /// <exception cref="ObjectDisposedException">if this object has been disposed</exception>
         public IEnumerable<PluginMetadata> EnabledPlugins
-            => ThrowIfDisposed<IEnumerable<PluginMetadata>>() ?? DisabledPluginsInternal;
+            => ThrowIfDisposed<IEnumerable<PluginMetadata>>() ?? EnabledPluginsInternal;
         private IEnumerable<PluginMetadata> EnabledPluginsInternal => currentlyEnabled.Except(toDisable).Concat(toEnable);
         /// <summary>
         /// Gets a list of plugins that are disabled according to this transaction's current state.
@@ -139,6 +147,7 @@ namespace IPA.Loader
 
             toDisable.Remove(meta);
             toEnable.Add(meta);
+            stateChanged = true;
             return true;
         }
 
@@ -195,6 +204,7 @@ namespace IPA.Loader
 
             toDisable.Add(meta);
             toEnable.Remove(meta);
+            stateChanged = true;
             return true;
         }
 
@@ -226,6 +236,23 @@ namespace IPA.Loader
         /// <exception cref="ObjectDisposedException">if this object has been disposed</exception>
         /// <exception cref="InvalidOperationException">if the plugins' state no longer matches this transaction's original state</exception>
         public Task Commit() => ThrowIfDisposed<Task>() ?? PluginManager.CommitTransaction(this);
+
+        /// <summary>
+        /// Clones this transaction to be identical, but with unrelated underlying sets.
+        /// </summary>
+        /// <returns>the new <see cref="StateTransitionTransaction"/></returns>
+        /// <exception cref="ObjectDisposedException">if this object has been disposed</exception>
+        public StateTransitionTransaction Clone()
+        {
+            ThrowIfDisposed();
+            var copy = new StateTransitionTransaction(CurrentlyEnabled, CurrentlyDisabled);
+            foreach (var toEnable in ToEnable)
+                copy.toEnable.Add(toEnable);
+            foreach (var toDisable in ToDisable)
+                copy.toDisable.Add(toDisable);
+            copy.stateChanged = stateChanged;
+            return copy;
+        }
 
         private void ThrowIfDisposed() => ThrowIfDisposed<byte>();
         private T ThrowIfDisposed<T>()

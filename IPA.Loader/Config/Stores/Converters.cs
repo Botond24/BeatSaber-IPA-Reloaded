@@ -1,5 +1,6 @@
 ﻿using IPA.Config.Data;
 using IPA.Config.Stores.Attributes;
+using IPA.Logging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -12,7 +13,7 @@ namespace IPA.Config.Stores.Converters
     /// <summary>
     /// Provides utility functions for custom converters.
     /// </summary>
-    public static class Converter 
+    public static class Converter
     {
         /// <summary>
         /// Gets the integral value of a <see cref="Value"/>, coercing a <see cref="FloatingPoint"/> if necessary,
@@ -35,16 +36,74 @@ namespace IPA.Config.Stores.Converters
                val is Integer inte ? inte.AsFloat()?.Value :
                null;
 
+        internal static Type GetDefaultConverterType(Type t)
+        {
+            if (t.IsEnum)
+            {
+                return typeof(CaseInsensitiveEnumConverter<>).MakeGenericType(t);
+            }
+            if (t.IsGenericType)
+            {
+                var generic = t.GetGenericTypeDefinition();
+                var args = t.GetGenericArguments();
+                if (generic == typeof(List<>))
+                    return (typeof(ListConverter<>).MakeGenericType(args));
+                else if (generic == typeof(IList<>))
+                    return (typeof(IListConverter<>).MakeGenericType(args));
+                else if (generic == typeof(Dictionary<,>) && args[0] == typeof(string))
+                    return (typeof(DictionaryConverter<>).MakeGenericType(args[1]));
+                else if (generic == typeof(IDictionary<,>) && args[0] == typeof(string))
+                    return (typeof(IDictionaryConverter<>).MakeGenericType(args[1]));
+#if NET4
+                else if (generic == typeof(ISet<>))
+                    return (typeof(ISetConverter<>).MakeGenericType(args));
+                else if (generic == typeof(IReadOnlyDictionary<,>) && args[0] == typeof(string))
+                    return (typeof(IReadOnlyDictionaryConverter<>).MakeGenericType(args[1]));
+#endif
+            }
+            var iCollBase = t.GetInterfaces()
+                .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(ICollection<>));
+            if (iCollBase != null && t.GetConstructor(Type.EmptyTypes) != null)
+            { // if it implements ICollection and has a default constructor
+                var valueType = iCollBase.GetGenericArguments().First();
+                return (typeof(CollectionConverter<,>).MakeGenericType(valueType, t));
+            }
+            if (t == typeof(string))
+            {
+                //Logger.log.Debug($"gives StringConverter");
+                return typeof(StringConverter);
+            }
+            if (t.IsValueType)
+            { // we have to do this garbo to make it accept the thing that we know is a value type at instantiation time
+                if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(Nullable<>))
+                { // this is a Nullable
+                    //Logger.log.Debug($"gives NullableConverter<{Nullable.GetUnderlyingType(t)}>");
+                    return (typeof(NullableConverter<>).MakeGenericType(Nullable.GetUnderlyingType(t)));
+                }
+
+                //Logger.log.Debug($"gives converter for value type {t}");
+                var valConv = Activator.CreateInstance(typeof(ValConv<>).MakeGenericType(t)) as IValConv;
+                return valConv.Get();
+            }
+
+            //Logger.log.Debug($"gives CustomObjectConverter<{t}>");
+            return (typeof(CustomObjectConverter<>).MakeGenericType(t));
+        }
+
+        internal interface IValConv
+        {
+            Type Get();
+        }
         internal interface IValConv<T>
         {
-            ValueConverter<T> Get();
+            Type Get();
         }
-        internal class ValConv<T> : IValConv<T> where T : struct
+        internal class ValConv<T> : IValConv, IValConv<T> where T : struct
         {
             private static readonly IValConv<T> Impl = ValConvImpls.Impl as IValConv<T> ?? new ValConv<T>();
-            public ValueConverter<T> Get() => Impl.Get();
-            ValueConverter<T> IValConv<T>.Get()
-                => null; // default to null
+            public Type Get() => Impl.Get();
+            Type IValConv<T>.Get()
+                => typeof(CustomValueTypeConverter<T>);
         }
         private class ValConvImpls : IValConv<char>,
             IValConv<IntPtr>, IValConv<UIntPtr>,
@@ -56,21 +115,21 @@ namespace IPA.Config.Stores.Converters
             IValConv<decimal>, IValConv<bool>
         {
             internal static readonly ValConvImpls Impl = new ValConvImpls();
-            ValueConverter<char> IValConv<char>.Get() => new CharConverter();
-            ValueConverter<long> IValConv<long>.Get() => new LongConverter();
-            ValueConverter<ulong> IValConv<ulong>.Get() => new ULongConverter();
-            ValueConverter<IntPtr> IValConv<IntPtr>.Get() => new IntPtrConverter();
-            ValueConverter<UIntPtr> IValConv<UIntPtr>.Get() => new UIntPtrConverter();
-            ValueConverter<int> IValConv<int>.Get() => new IntConverter();
-            ValueConverter<uint> IValConv<uint>.Get() => new UIntConverter();
-            ValueConverter<short> IValConv<short>.Get() => new ShortConverter();
-            ValueConverter<ushort> IValConv<ushort>.Get() => new UShortConverter();
-            ValueConverter<byte> IValConv<byte>.Get() => new ByteConverter();
-            ValueConverter<sbyte> IValConv<sbyte>.Get() => new SByteConverter();
-            ValueConverter<float> IValConv<float>.Get() => new FloatConverter();
-            ValueConverter<double> IValConv<double>.Get() => new DoubleConverter();
-            ValueConverter<decimal> IValConv<decimal>.Get() => new DecimalConverter();
-            ValueConverter<bool> IValConv<bool>.Get() => new BooleanConverter();
+            Type IValConv<char>.Get() => typeof(CharConverter);
+            Type IValConv<long>.Get() => typeof(LongConverter);
+            Type IValConv<ulong>.Get() => typeof(ULongConverter);
+            Type IValConv<IntPtr>.Get() => typeof(IntPtrConverter);
+            Type IValConv<UIntPtr>.Get() => typeof(UIntPtrConverter);
+            Type IValConv<int>.Get() => typeof(IntConverter);
+            Type IValConv<uint>.Get() => typeof(UIntConverter);
+            Type IValConv<short>.Get() => typeof(ShortConverter);
+            Type IValConv<ushort>.Get() => typeof(UShortConverter);
+            Type IValConv<byte>.Get() => typeof(ByteConverter);
+            Type IValConv<sbyte>.Get() => typeof(SByteConverter);
+            Type IValConv<float>.Get() => typeof(FloatConverter);
+            Type IValConv<double>.Get() => typeof(DoubleConverter);
+            Type IValConv<decimal>.Get() => typeof(DecimalConverter);
+            Type IValConv<bool>.Get() => typeof(BooleanConverter);
         }
     }
 
@@ -84,38 +143,18 @@ namespace IPA.Config.Stores.Converters
         /// <summary>
         /// Gets the default <see cref="ValueConverter{T}"/> for the current type.
         /// </summary>
-        public static ValueConverter<T> Default 
-        {
-            get
-            {
-                if (defaultConverter == null) 
-                    defaultConverter = MakeDefault();
-                return defaultConverter;
-            }
-        }
+        public static ValueConverter<T> Default
+            => defaultConverter ??= MakeDefault();
 
-        private static ValueConverter<T> MakeDefault()
+        internal static ValueConverter<T> MakeDefault()
         {
             var t = typeof(T);
+            //Logger.log.Debug($"Converter<{t}>.MakeDefault()");
 
-            if (t.IsValueType)
-            { // we have to do this garbo to make it accept the thing that we know is a value type at instantiation time
-                if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(Nullable<>))
-                { // this is a Nullable
-                    return Activator.CreateInstance(typeof(NullableConverter<>).MakeGenericType(Nullable.GetUnderlyingType(t))) as ValueConverter<T>;
-                }
+            static ValueConverter<T> MakeInstOf(Type ty)
+                => Activator.CreateInstance(ty) as ValueConverter<T>;
 
-                var valConv = Activator.CreateInstance(typeof(Converter.ValConv<>).MakeGenericType(t)) as Converter.IValConv<T>;
-                return valConv.Get();
-            }
-            else if (t == typeof(string))
-            {
-                return new StringConverter() as ValueConverter<T>;
-            }
-            else
-            {
-                return Activator.CreateInstance(typeof(CustomObjectConverter<>).MakeGenericType(t)) as ValueConverter<T>;
-            }
+            return MakeInstOf(Converter.GetDefaultConverterType(t));
         }
     }
 
@@ -167,8 +206,8 @@ namespace IPA.Config.Stores.Converters
     /// <typeparam name="T">the underlying type of the <see cref="Nullable{T}"/></typeparam>
     /// <typeparam name="TConverter">the type to use as an underlying converter</typeparam>
     /// <seealso cref="NullableConverter{T}"/>
-    public sealed class NullableConverter<T, TConverter> : NullableConverter<T> 
-        where T : struct 
+    public sealed class NullableConverter<T, TConverter> : NullableConverter<T>
+        where T : struct
         where TConverter : ValueConverter<T>, new()
     {
         /// <summary>
@@ -252,7 +291,7 @@ namespace IPA.Config.Stores.Converters
         /// <returns>the deserialized enum value</returns>
         /// <exception cref="ArgumentException">if <paramref name="value"/> is not a numeric node</exception>
         public override T FromValue(Value value, object parent)
-            => (T)Enum.ToObject(typeof(T), Converter.IntValue(value) 
+            => (T)Enum.ToObject(typeof(T), Converter.IntValue(value)
                     ?? throw new ArgumentException("Value not a numeric node", nameof(value)));
 
         /// <summary>
@@ -264,6 +303,184 @@ namespace IPA.Config.Stores.Converters
         public override Value ToValue(T obj, object parent)
             => Value.Integer(Convert.ToInt64(obj));
     }
+
+    /// <summary>
+    /// A converter for instances of <see cref="IDictionary{TKey, TValue}"/>.
+    /// </summary>
+    /// <typeparam name="TValue">the value type of the dictionary</typeparam>
+    public class IDictionaryConverter<TValue> : ValueConverter<IDictionary<string, TValue>>
+    {
+        /// <summary>
+        /// Gets the converter for the dictionary's value type.
+        /// </summary>
+        protected ValueConverter<TValue> BaseConverter { get; }
+
+        /// <summary>
+        /// Constructs an <see cref="IDictionaryConverter{TValue}"/> using the default converter for the value type.
+        /// </summary>
+        public IDictionaryConverter() : this(Converter<TValue>.Default) { }
+        /// <summary>
+        /// Constructs an <see cref="IDictionaryConverter{TValue}"/> using the specified converter for the value.
+        /// </summary>
+        /// <param name="converter">the converter for the value</param>
+        public IDictionaryConverter(ValueConverter<TValue> converter)
+            => BaseConverter = converter;
+
+        /// <summary>
+        /// Converts a <see cref="Map"/> to an <see cref="IDictionary{TKey, TValue}"/> that is represented by it.
+        /// </summary>
+        /// <param name="value">the <see cref="Map"/> to convert</param>
+        /// <param name="parent">the parent that will own the resulting object</param>
+        /// <returns>the deserialized dictionary</returns>
+        public override IDictionary<string, TValue> FromValue(Value value, object parent)
+            => (value as Map)?.Select(kvp => (kvp.Key, val: BaseConverter.FromValue(kvp.Value, parent)))
+                    ?.ToDictionary(p => p.Key, p => p.val)
+                ?? throw new ArgumentException("Value not a map", nameof(value));
+
+        /// <summary>
+        /// Serializes an <see cref="IDictionary{TKey, TValue}"/> into a <see cref="Map"/> containing its values.
+        /// </summary>
+        /// <param name="obj">the dictionary to serialize</param>
+        /// <param name="parent">the object that owns the dictionary</param>
+        /// <returns>the dictionary serialized as a <see cref="Map"/></returns>
+        public override Value ToValue(IDictionary<string, TValue> obj, object parent)
+            => Value.From(obj.Select(p => new KeyValuePair<string, Value>(p.Key, BaseConverter.ToValue(p.Value, parent))));
+    }
+
+    /// <summary>
+    /// A converter for instances of <see cref="IDictionary{TKey, TValue}"/>, specifying a value converter as a type parameter.
+    /// </summary>
+    /// <typeparam name="TValue">the value type of the dictionary</typeparam>
+    /// <typeparam name="TConverter">the converter type for values</typeparam>
+    public sealed class IDictionaryConverter<TValue, TConverter> : IDictionaryConverter<TValue>
+        where TConverter : ValueConverter<TValue>, new()
+    {
+        /// <summary>
+        /// Constructs a new <see cref="IDictionaryConverter{TValue, TConverter}"/> with a new instance of 
+        /// <typeparamref name="TConverter"/> as the value converter.
+        /// </summary>
+        public IDictionaryConverter() : base(new TConverter()) { }
+    }
+
+
+    /// <summary>
+    /// A converter for instances of <see cref="Dictionary{TKey, TValue}"/>.
+    /// </summary>
+    /// <typeparam name="TValue">the value type of the dictionary</typeparam>
+    public class DictionaryConverter<TValue> : ValueConverter<Dictionary<string, TValue>>
+    {
+        /// <summary>
+        /// Gets the converter for the dictionary's value type.
+        /// </summary>
+        protected ValueConverter<TValue> BaseConverter { get; }
+
+        /// <summary>
+        /// Constructs an <see cref="IDictionaryConverter{TValue}"/> using the default converter for the value type.
+        /// </summary>
+        public DictionaryConverter() : this(Converter<TValue>.Default) { }
+        /// <summary>
+        /// Constructs an <see cref="IDictionaryConverter{TValue}"/> using the specified converter for the value.
+        /// </summary>
+        /// <param name="converter">the converter for the value</param>
+        public DictionaryConverter(ValueConverter<TValue> converter)
+            => BaseConverter = converter;
+
+        /// <summary>
+        /// Converts a <see cref="Map"/> to a <see cref="Dictionary{TKey, TValue}"/> that is represented by it.
+        /// </summary>
+        /// <param name="value">the <see cref="Map"/> to convert</param>
+        /// <param name="parent">the parent that will own the resulting object</param>
+        /// <returns>the deserialized dictionary</returns>
+        public override Dictionary<string, TValue> FromValue(Value value, object parent)
+            => (value as Map)?.Select(kvp => (kvp.Key, val: BaseConverter.FromValue(kvp.Value, parent)))
+                    ?.ToDictionary(p => p.Key, p => p.val)
+                ?? throw new ArgumentException("Value not a map", nameof(value));
+
+        /// <summary>
+        /// Serializes a <see cref="Dictionary{TKey, TValue}"/> into a <see cref="Map"/> containing its values.
+        /// </summary>
+        /// <param name="obj">the dictionary to serialize</param>
+        /// <param name="parent">the object that owns the dictionary</param>
+        /// <returns>the dictionary serialized as a <see cref="Map"/></returns>
+        public override Value ToValue(Dictionary<string, TValue> obj, object parent)
+            => Value.From(obj.Select(p => new KeyValuePair<string, Value>(p.Key, BaseConverter.ToValue(p.Value, parent))));
+    }
+
+    /// <summary>
+    /// A converter for instances of <see cref="Dictionary{TKey, TValue}"/>, specifying a value converter as a type parameter.
+    /// </summary>
+    /// <typeparam name="TValue">the value type of the dictionary</typeparam>
+    /// <typeparam name="TConverter">the converter type for values</typeparam>
+    public sealed class DictionaryConverter<TValue, TConverter> : DictionaryConverter<TValue>
+        where TConverter : ValueConverter<TValue>, new()
+    {
+        /// <summary>
+        /// Constructs a new <see cref="IDictionaryConverter{TValue, TConverter}"/> with a new instance of 
+        /// <typeparamref name="TConverter"/> as the value converter.
+        /// </summary>
+        public DictionaryConverter() : base(new TConverter()) { }
+    }
+
+#if NET4
+
+    /// <summary>
+    /// A converter for instances of <see cref="IReadOnlyDictionary{TKey, TValue}"/>.
+    /// </summary>
+    /// <typeparam name="TValue">the value type of the dictionary</typeparam>
+    public class IReadOnlyDictionaryConverter<TValue> : ValueConverter<IReadOnlyDictionary<string, TValue>>
+    {
+        /// <summary>
+        /// Gets the converter for the dictionary's value type.
+        /// </summary>
+        protected ValueConverter<TValue> BaseConverter { get; }
+
+        /// <summary>
+        /// Constructs an <see cref="IReadOnlyDictionaryConverter{TValue}"/> using the default converter for the value type.
+        /// </summary>
+        public IReadOnlyDictionaryConverter() : this(Converter<TValue>.Default) { }
+        /// <summary>
+        /// Constructs an <see cref="IReadOnlyDictionaryConverter{TValue}"/> using the specified converter for the value.
+        /// </summary>
+        /// <param name="converter">the converter for the value</param>
+        public IReadOnlyDictionaryConverter(ValueConverter<TValue> converter)
+            => BaseConverter = converter;
+
+        /// <summary>
+        /// Converts a <see cref="Map"/> to an <see cref="IDictionary{TKey, TValue}"/> that is represented by it.
+        /// </summary>
+        /// <param name="value">the <see cref="Map"/> to convert</param>
+        /// <param name="parent">the parent that will own the resulting object</param>
+        /// <returns>the deserialized dictionary</returns>
+        public override IReadOnlyDictionary<string, TValue> FromValue(Value value, object parent)
+            => (value as Map)?.Select(kvp => (kvp.Key, val: BaseConverter.FromValue(kvp.Value, parent)))
+                    ?.ToDictionary(p => p.Key, p => p.val)
+                ?? throw new ArgumentException("Value not a map", nameof(value));
+
+        /// <summary>
+        /// Serializes an <see cref="IDictionary{TKey, TValue}"/> into a <see cref="Map"/> containing its values.
+        /// </summary>
+        /// <param name="obj">the dictionary to serialize</param>
+        /// <param name="parent">the object that owns the dictionary</param>
+        /// <returns>the dictionary serialized as a <see cref="Map"/></returns>
+        public override Value ToValue(IReadOnlyDictionary<string, TValue> obj, object parent)
+            => Value.From(obj.Select(p => new KeyValuePair<string, Value>(p.Key, BaseConverter.ToValue(p.Value, parent))));
+    }
+
+    /// <summary>
+    /// A converter for instances of <see cref="IReadOnlyDictionary{TKey, TValue}"/>, specifying a value converter as a type parameter.
+    /// </summary>
+    /// <typeparam name="TValue">the value type of the dictionary</typeparam>
+    /// <typeparam name="TConverter">the converter type for values</typeparam>
+    public sealed class IReadOnlyDictionaryConverter<TValue, TConverter> : IReadOnlyDictionaryConverter<TValue>
+        where TConverter : ValueConverter<TValue>, new()
+    {
+        /// <summary>
+        /// Constructs a new <see cref="IReadOnlyDictionaryConverter{TValue, TConverter}"/> with a new instance of 
+        /// <typeparamref name="TConverter"/> as the value converter.
+        /// </summary>
+        public IReadOnlyDictionaryConverter() : base(new TConverter()) { }
+    }
+#endif
 
     internal class StringConverter : ValueConverter<string>
     {
@@ -277,7 +494,7 @@ namespace IPA.Config.Stores.Converters
     internal class CharConverter : ValueConverter<char>
     {
         public override char FromValue(Value value, object parent)
-            => (value as Text)?.Value[0] 
+            => (value as Text)?.Value[0]
                 ?? throw new ArgumentException("Value not a text node", nameof(value)); // can throw nullptr
 
         public override Value ToValue(char obj, object parent)
@@ -287,7 +504,7 @@ namespace IPA.Config.Stores.Converters
     internal class LongConverter : ValueConverter<long>
     {
         public override long FromValue(Value value, object parent)
-            => Converter.IntValue(value) 
+            => Converter.IntValue(value)
                 ?? throw new ArgumentException("Value not a numeric value", nameof(value));
 
         public override Value ToValue(long obj, object parent)
@@ -297,7 +514,7 @@ namespace IPA.Config.Stores.Converters
     internal class ULongConverter : ValueConverter<ulong>
     {
         public override ulong FromValue(Value value, object parent)
-            => (ulong)(Converter.FloatValue(value) 
+            => (ulong)(Converter.FloatValue(value)
                 ?? throw new ArgumentException("Value not a numeric value", nameof(value)));
 
         public override Value ToValue(ulong obj, object parent)

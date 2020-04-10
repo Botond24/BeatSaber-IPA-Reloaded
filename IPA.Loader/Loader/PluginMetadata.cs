@@ -1,12 +1,15 @@
 ﻿using IPA.Loader.Features;
 using IPA.Utilities;
 using Mono.Cecil;
+using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using Version = SemVer.Version;
 #if NET3
 using Net3_Proxy;
+using Path = Net3_Proxy.Path;
 #endif
 
 namespace IPA.Loader
@@ -41,6 +44,18 @@ namespace IPA.Loader
         public string Id { get; internal set; }
 
         /// <summary>
+        /// The name of the author that wrote this plugin.
+        /// </summary>
+        /// <value>the name of the plugin's author</value>
+        public string Author { get; private set; }
+
+        /// <summary>
+        /// The description of this plugin.
+        /// </summary>
+        /// <value>the description of the plugin</value>
+        public string Description { get; private set; }
+
+        /// <summary>
         /// The version of the plugin.
         /// </summary>
         /// <value>the version of the plugin</value>
@@ -60,6 +75,35 @@ namespace IPA.Loader
         public IReadOnlyList<Feature> Features => InternalFeatures;
 
         internal readonly List<Feature> InternalFeatures = new List<Feature>();
+
+        /// <summary>
+        /// A list of files (that aren't <see cref="File"/>) that are associated with this plugin.
+        /// </summary>
+        /// <value>a list of associated files</value>
+        public IReadOnlyList<FileInfo> AssociatedFiles { get; private set; } = new List<FileInfo>();
+
+        /// <summary>
+        /// The name of the resource in the plugin assembly containing the plugin's icon.
+        /// </summary>
+        /// <value>the name of the plugin's icon</value>
+        public string IconName { get; private set; }
+
+        /// <summary>
+        /// A link to this plugin's home page, if any.
+        /// </summary>
+        /// <value>the <see cref="Uri"/> of the plugin's home page</value>
+        public Uri PluginHomeLink { get; private set; }
+
+        /// <summary>
+        /// A link to this plugin's source code, if avaliable.
+        /// </summary>
+        /// <value>the <see cref="Uri"/> of the plugin's source code</value>
+        public Uri PluginSourceLink { get; private set; }
+        /// <summary>
+        /// A link to a donate page for the author of this plugin, if avaliable.
+        /// </summary>
+        /// <value>the <see cref="Uri"/> of the author's donate page</value>
+        public Uri DonateLink { get; private set; }
 
         internal bool IsSelf;
 
@@ -82,6 +126,15 @@ namespace IPA.Loader
                 Name = value.Name;
                 Version = value.Version;
                 Id = value.Id;
+                Description = value.Description;
+                Author = value.Author;
+                IconName = value.IconPath;
+                PluginHomeLink = value.Links?.ProjectHome;
+                PluginSourceLink = value.Links?.ProjectSource;
+                DonateLink = value.Links?.Donate;
+                AssociatedFiles = value.Files
+                    .Select(f => Path.Combine(UnityGame.InstallPath, f))
+                    .Select(p => new FileInfo(p)).ToList();
             }
         }
 

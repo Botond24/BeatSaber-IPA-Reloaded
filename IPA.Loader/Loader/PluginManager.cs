@@ -76,22 +76,29 @@ namespace IPA.Loader
         /// </summary>
         /// <returns>a new <see cref="StateTransitionTransaction"/> that captures the current state of loaded mods</returns>
         public static StateTransitionTransaction PluginStateTransaction()
-            => new StateTransitionTransaction(AllPlugins, DisabledPlugins);
+            => new StateTransitionTransaction(EnabledPlugins, DisabledPlugins);
 
         private static readonly object commitTransactionLockObject = new object();
 
         internal static Task CommitTransaction(StateTransitionTransaction transaction)
         {
+            if (!transaction.HasStateChanged) return TaskEx.WhenAll();
+
             if (!UnityGame.OnMainThread)
-                return UnityMainThreadTaskScheduler.Factory.StartNew(() => CommitTransaction(transaction)).Unwrap();
+            {
+                var transactionCopy = transaction.Clone();
+                transaction.Dispose();
+                return UnityMainThreadTaskScheduler.Factory.StartNew(() => CommitTransaction(transactionCopy)).Unwrap();
+            }
 
             lock (commitTransactionLockObject)
             {
-                if (transaction.CurrentlyEnabled.Except(AllPlugins)
-                               .Concat(AllPlugins.Except(transaction.CurrentlyEnabled)).Any()
+                if (transaction.CurrentlyEnabled.Except(EnabledPlugins)
+                               .Concat(EnabledPlugins.Except(transaction.CurrentlyEnabled)).Any()
                  || transaction.CurrentlyDisabled.Except(DisabledPlugins)
                                .Concat(DisabledPlugins.Except(transaction.CurrentlyDisabled)).Any())
                 { // ensure that the transaction's base state reflects the current state, otherwise throw
+                    transaction.Dispose();
                     throw new InvalidOperationException("Transaction no longer resembles the current state of plugins");
                 }
 
@@ -123,7 +130,7 @@ namespace IPA.Loader
                             if (executor != null)
                                 runtimeDisabledPlugins.Remove(executor);
                             else
-                                executor = PluginLoader.InitPlugin(meta, AllPlugins);
+                                executor = PluginLoader.InitPlugin(meta, EnabledPlugins);
 
                             if (executor == null) continue; // couldn't initialize, skip to next
                         }
@@ -151,7 +158,7 @@ namespace IPA.Loader
                     }
                 }
 
-                Task result;
+                var result = TaskEx.WhenAll();
                 {
                     // then disable the mods that need to be
                     static DisableExecutor MakeDisableExec(PluginExecutor e)
@@ -188,8 +195,11 @@ namespace IPA.Loader
                                 return TaskEx6.FromException(new CannotRuntimeDisableException(exec.Executor.Metadata));
 
                             var res = TaskEx.WhenAll(exec.Dependents.Select(d => Disable(d, alreadyDisabled)))
-                                 .ContinueWith(t => TaskEx.WhenAll(t, exec.Executor.Disable()), UnityMainThreadTaskScheduler.Default).Unwrap();
-                            // The WhenAll above allows us to wait for the executor to disable, but still propagate errors
+                                 .ContinueWith(t => t.IsFaulted 
+                                    ? TaskEx.WhenAll(t, TaskEx6.FromException(
+                                        new CannotRuntimeDisableException(exec.Executor.Metadata, "Dependents cannot be disabled for plugin"))) 
+                                    : exec.Executor.Disable(), UnityMainThreadTaskScheduler.Default).Unwrap();
+                            // We do not want to call the disable method if a dependent couldn't be disabled
                             // By scheduling on a UnityMainThreadScheduler, we ensure that Disable() is always called on the Unity main thread
                             alreadyDisabled.Add(exec.Executor, res);
                             return res;
@@ -199,6 +209,11 @@ namespace IPA.Loader
                     var disabled = new Dictionary<PluginExecutor, Task>();
                     result = TaskEx.WhenAll(disableStructure.Select(d => Disable(d, disabled)));
                 }
+
+                OnAnyPluginsStateChanged?.Invoke(result, toEnable, toDisable);
+                // if there are any that are capable of enabling/disabling at runtime, run event handler
+                if (toEnable.Concat(toDisable).Any(m => m.RuntimeOptions == RuntimeOptions.DynamicInit))
+                    OnPluginsStateChanged?.Invoke(result);
 
                 //DisabledConfig.Instance.Changed();
                 // changed is handled by transaction
@@ -226,12 +241,6 @@ namespace IPA.Loader
         /// <returns><see langword="true"/> if the plugin is enabled, <see langword="false"/> otherwise.</returns>
         public static bool IsEnabled(PluginMetadata meta) => BSMetas.Any(p => p.Metadata == meta);
 
-        /// <summary>
-        /// Gets a list of disabled BSIPA plugins.
-        /// </summary>
-        /// <value>a collection of all disabled plugins as <see cref="PluginMetadata"/></value>
-        public static IEnumerable<PluginMetadata> DisabledPlugins => PluginLoader.DisabledPlugins;
-        private static readonly HashSet<PluginExecutor> runtimeDisabledPlugins = new HashSet<PluginExecutor>();
 
         /// <summary>
         /// An invoker for the <see cref="PluginEnabled"/> event.
@@ -245,27 +254,68 @@ namespace IPA.Loader
         /// <param name="plugin">the plugin that was disabled</param>
         /// <param name="needsRestart">whether it needs a restart to take effect</param>
         public delegate void PluginDisableDelegate(PluginMetadata plugin, bool needsRestart);
+        /// <summary>
+        /// A delegate representing a state change event for any plugin.
+        /// </summary>
+        /// <param name="changeTask">the <see cref="Task"/> representing the change</param>
+        /// <param name="enabled">the plugins that were enabled in the change</param>
+        /// <param name="disabled">the plugins that were disabled in the change</param>
+        public delegate void OnAnyPluginsStateChangedDelegate(Task changeTask, IEnumerable<PluginMetadata> enabled, IEnumerable<PluginMetadata> disabled);
 
         /// <summary>
-        /// Called whenever a plugin is enabled.
+        /// Called whenever a plugin is enabled, before the plugin in question is enabled.
         /// </summary>
         public static event PluginEnableDelegate PluginEnabled;
         /// <summary>
-        /// Called whenever a plugin is disabled.
+        /// Called whenever a plugin is disabled, before the plugin in question is enabled.
         /// </summary>
         public static event PluginDisableDelegate PluginDisabled;
+        /// <summary>
+        /// Called whenever any plugins have their state changed at runtime with the <see cref="Task"/> representing that state change.
+        /// </summary>
+        /// <remarks>
+        /// Note that this is called on the Unity main thread, and cannot therefore block, as the <see cref="Task"/>
+        /// provided represents operations that also run on the Unity main thread.
+        /// </remarks>
+        public static event Action<Task> OnPluginsStateChanged;
+        /// <summary>
+        /// Called whenever any plugins, regardless of whether or not their change occurs during runtime, have their state changed.
+        /// </summary>
+        /// <remarks>
+        /// Note that this is called on the Unity main thread, and cannot therefore block, as the <see cref="Task"/>
+        /// provided represents operations that also run on the Unity main thread.
+        /// </remarks>
+        public static event OnAnyPluginsStateChangedDelegate OnAnyPluginsStateChanged;
 
         /// <summary>
-        /// Gets a list of all enabled BSIPA plugins.
+        /// Gets a list of all enabled BSIPA plugins. Use <see cref="EnabledPlugins"/> instead of this.
         /// </summary>
         /// <value>a collection of all enabled plugins as <see cref="PluginMetadata"/>s</value>
-        public static IEnumerable<PluginMetadata> AllPlugins => BSMetas.Select(p => p.Metadata);
+        [Obsolete("This is an old name that no longer accurately represents its value. Use EnabledPlugins instead.")]
+        public static IEnumerable<PluginMetadata> AllPlugins => EnabledPlugins;
+        /// <summary>
+        /// Gets a collection of all enabled plugins, as represented by <see cref="PluginMetadata"/>.
+        /// </summary>
+        /// <value>a collection of all enabled plugins</value>
+        public static IEnumerable<PluginMetadata> EnabledPlugins => BSMetas.Select(p => p.Metadata);
+        /// <summary>
+        /// Gets a list of disabled BSIPA plugins.
+        /// </summary>
+        /// <value>a collection of all disabled plugins as <see cref="PluginMetadata"/></value>
+        public static IEnumerable<PluginMetadata> DisabledPlugins => PluginLoader.DisabledPlugins;
+        private static readonly HashSet<PluginExecutor> runtimeDisabledPlugins = new HashSet<PluginExecutor>();
+
+        /// <summary>
+        /// Gets a read-only dictionary of an ignored plugin to the reason it was ignored, as an <see cref="IgnoreReason"/>.
+        /// </summary>
+        /// <value>a dictionary of <see cref="PluginMetadata"/> to <see cref="IgnoreReason"/> of ignored plugins</value>
+        public static IReadOnlyDictionary<PluginMetadata, IgnoreReason> IgnoredPlugins => PluginLoader.ignoredPlugins;
 
         /// <summary>
         /// An <see cref="IEnumerable{T}"/> of old IPA plugins.
         /// </summary>
         /// <value>all legacy plugin instances</value>
-        [Obsolete("I mean, IPlugin shouldn't be used, so why should this? Not renaming to extend support for old plugins.")]
+        [Obsolete("This exists only to provide support for legacy IPA plugins based on the IPlugin interface.")]
         public static IEnumerable<Old.IPlugin> Plugins => _ipaPlugins;
         private static List<Old.IPlugin> _ipaPlugins;
 
@@ -292,16 +342,15 @@ namespace IPA.Loader
             else
             {
                 foreach (string plugin in Directory.GetFiles(cacheDir, "*"))
-                {
                     File.Delete(plugin);
-                }
             }
 
             // initialize BSIPA plugins first
             _bsPlugins.AddRange(PluginLoader.LoadPlugins());
 
             var metadataPaths = PluginLoader.PluginsMetadata.Select(m => m.File.FullName).ToList();
-            var ignoredPaths = PluginLoader.ignoredPlugins.Select(m => m.Key.File.FullName).ToList();
+            var ignoredPaths = PluginLoader.ignoredPlugins.Select(m => m.Key.File.FullName)
+                .Concat(PluginLoader.ignoredPlugins.SelectMany(m => m.Key.AssociatedFiles.Select(f => f.FullName))).ToList();
             var disabledPaths = DisabledPlugins.Select(m => m.File.FullName).ToList();
 
             //Copy plugins to .cache
@@ -328,8 +377,6 @@ namespace IPA.Loader
                 { // fix type references
                     if (@ref.FullName == "IllusionPlugin.IPlugin") @ref.Namespace = "IPA.Old"; //@ref.Name = "";
                     if (@ref.FullName == "IllusionPlugin.IEnhancedPlugin") @ref.Namespace = "IPA.Old"; //@ref.Name = "";
-                    if (@ref.FullName == "IllusionPlugin.IBeatSaberPlugin") { @ref.Namespace = "IPA"; @ref.Name = nameof(IPlugin); }
-                    if (@ref.FullName == "IllusionPlugin.IEnhancedBeatSaberPlugin") { @ref.Namespace = "IPA"; @ref.Name = nameof(IEnhancedPlugin); }
                     if (@ref.FullName == "IllusionPlugin.IniFile") @ref.Namespace = "IPA.Config"; //@ref.Name = "";
                     if (@ref.FullName == "IllusionPlugin.IModPrefs") @ref.Namespace = "IPA.Config"; //@ref.Name = "";
                     if (@ref.FullName == "IllusionPlugin.ModPrefs") @ref.Namespace = "IPA.Config"; //@ref.Name = "";
